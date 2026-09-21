@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/day-patterns/new" class="btn btn--primary">+ パターンを追加</a>
+{% endblock %}
+
+{% block content %}
+
+<p class="form-hint">
+  1日の中で「営業時間内 (ON)」となる時間帯のテンプレートです。
+  「時間条件」の曜日ごとの割り当てや、「カレンダー例外」(祝日・休業日) の
+  適用先として使います。ON の時間帯を何も設定しなければ「終日休業」の
+  パターンになります。
+</p>
+
+{% if not items %}
+<div class="empty">
+  <p>日次パターンがありません。</p>
+  <p class="empty__hint">
+    例: 「平日」(9:00-12:00, 13:00-18:00 が ON) や「終日休業」
+    (ON の時間帯なし) を作成してください。
+  </p>
+  <a href="/day-patterns/new" class="btn btn--primary">パターンを追加</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>名前</th>
+      <th>表示名</th>
+      <th>営業時間 (ON)</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td class="mono">{{ it.name }}</td>
+      <td>{{ it.display_name }}</td>
+      <td class="mono">{{ it.on_ranges if it.on_ranges else "(終日休業)" }}</td>
+      <td>
+        {% if it.enabled %}<span class="badge badge--ok">有効</span>
+        {% else %}<span class="badge badge--off">無効</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/day-patterns/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/day-patterns/{{ it.id }}/delete"
+              onsubmit="return confirm('パターン {{ it.display_name }} を削除しますか? (使用中の時間条件・カレンダー例外がある場合は先にそちらを変更してください)')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

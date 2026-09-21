@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/extensions/new" class="btn btn--primary">+ 内線を追加</a>
+{% endblock %}
+
+{% block content %}
+{% if not items %}
+<div class="empty">
+  <p>内線がまだ登録されていません。</p>
+  <a href="/extensions/new" class="btn btn--primary">最初の内線を追加</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>内線</th>
+      <th>表示名</th>
+      <th>コーデック</th>
+      <th>トランスポート</th>
+      <th>NAT</th>
+      <th>VM</th>
+      <th>状態</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td class="mono"><strong>{{ it.extension }}</strong></td>
+      <td>{{ it.display_name }}</td>
+      <td class="mono">
+        {{ it.codec_primary }}{% if it.codec_secondary %}, {{ it.codec_secondary }}{% endif %}
+      </td>
+      <td class="mono">{{ it.transport }}</td>
+      <td class="mono compact">{{ it.nat_mode }}</td>
+      <td>{% if it.voicemail_enabled %}✔{% else %}—{% endif %}</td>
+      <td>
+        {% if it.enabled %}
+          <span class="badge badge--ok">有効</span>
+        {% else %}
+          <span class="badge badge--off">無効</span>
+        {% endif %}
+      </td>
+      <td class="actions">
+        <a href="/extensions/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/extensions/{{ it.id }}/delete"
+              onsubmit="return confirm('内線 {{ it.extension }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

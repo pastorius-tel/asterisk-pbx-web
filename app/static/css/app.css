@@ -1,0 +1,1093 @@
+/* =========================================================================
+   Asterisk PBX Manager — UI
+
+   Aesthetic direction: 落ち着いた業務用ダッシュボード。
+   - 情報密度を保ちつつ、無駄な装飾は排除。
+   - 番号 / IP / コーデック等は等幅で揃える。
+   - サイドバーはダーク、本体はライト。コントラストで集中できる構成。
+   ========================================================================= */
+
+:root {
+  /* Colors — restrained, purposeful */
+  --c-bg:           #f4f5f7;
+  --c-surface:      #ffffff;
+  --c-surface-2:    #f9fafb;
+  --c-border:       #e3e5ea;
+  --c-border-soft:  #eef0f3;
+
+  --c-text:         #14181f;
+  --c-text-muted:   #5b6470;
+  --c-text-subtle:  #8a93a0;
+
+  --c-primary:      #0d6e63;     /* deep teal */
+  --c-primary-dark: #094e46;
+  --c-primary-soft: #d6ebe7;
+
+  --c-accent:       #b45309;     /* warm amber */
+  --c-danger:       #b42318;
+  --c-success:      #15803d;
+  --c-warn:         #b54708;
+
+  --c-sidebar:      #16202d;
+  --c-sidebar-2:    #1d2a3a;
+  --c-sidebar-text: #cdd5e0;
+  --c-sidebar-mute: #7d8a9c;
+
+  /* Type */
+  --f-sans: "Noto Sans JP", -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN",
+            "Yu Gothic UI", Meiryo, sans-serif;
+  --f-mono: "IBM Plex Mono", "JetBrains Mono", Consolas, "Courier New", monospace;
+
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+
+  --shadow-sm: 0 1px 2px rgba(20, 24, 31, 0.06);
+  --shadow-md: 0 4px 12px rgba(20, 24, 31, 0.08);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: var(--f-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 100vh;
+}
+
+a { color: var(--c-primary); text-decoration: none; }
+a:hover { color: var(--c-primary-dark); text-decoration: underline; }
+
+code, .mono { font-family: var(--f-mono); font-size: 0.92em; }
+
+/* コマンド例等の <pre> ブロックは折り返さず横スクロールさせる
+   (狭い画面で長いコマンドがページ全体をはみ出させないため) */
+pre {
+  overflow-x: auto;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* =========================================================================
+   Sidebar
+   ========================================================================= */
+
+.sidebar {
+  background: var(--c-sidebar);
+  color: var(--c-sidebar-text);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  /* iOS Safari は URL バーの表示/非表示でビューポート高さが変動し、
+     100vh だと実際に見えている領域より要素が縦に大きくなって下端が
+     見えなくなることがある (特に縦画面でナビ項目が多い本画面で顕著)。
+     100dvh (dynamic viewport height) 対応ブラウザではそちらを優先する。
+     未対応ブラウザ (古い Safari 等) は上の 100vh のまま動作する。*/
+  height: 100dvh;
+  border-right: 1px solid #0c131c;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 18px 16px;
+  border-bottom: 1px solid var(--c-sidebar-2);
+}
+.brand__mark {
+  width: 36px; height: 36px;
+  border-radius: var(--r-sm);
+  background: linear-gradient(140deg, var(--c-primary), var(--c-primary-dark));
+  color: white;
+  font-weight: 700;
+  font-size: 18px;
+  display: grid; place-items: center;
+  letter-spacing: -0.02em;
+}
+.brand__name {
+  line-height: 1.2;
+  font-weight: 700;
+  font-size: 15px;
+  color: #fff;
+}
+.brand__name small {
+  display: block;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--c-sidebar-mute);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.nav { flex: 1; padding: 12px 8px; overflow-y: auto; }
+.nav__group {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--c-sidebar-mute);
+  padding: 14px 12px 6px;
+  font-weight: 600;
+}
+.nav__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  color: var(--c-sidebar-text);
+  border-radius: var(--r-sm);
+  font-size: 13.5px;
+  font-weight: 500;
+  margin: 1px 0;
+  transition: background 0.12s;
+}
+.nav__item:hover {
+  background: var(--c-sidebar-2);
+  color: #fff;
+  text-decoration: none;
+}
+.nav__item.is-active {
+  background: var(--c-primary);
+  color: #fff;
+}
+.nav__item.is-active:hover { background: var(--c-primary-dark); }
+.nav__item.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.nav__item em {
+  font-style: normal;
+  font-size: 10px;
+  background: var(--c-sidebar-2);
+  padding: 1px 6px;
+  border-radius: 999px;
+  margin-left: auto;
+}
+.nav__icon {
+  width: 18px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--c-sidebar-mute);
+}
+.nav__item.is-active .nav__icon { color: #fff; }
+
+.sidebar__foot {
+  padding: 14px;
+  border-top: 1px solid var(--c-sidebar-2);
+}
+.apply-result {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--c-sidebar-mute);
+  max-height: 240px;
+  overflow-y: auto;
+}
+.apply-result__inner h3 {
+  margin: 8px 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--c-sidebar-mute);
+}
+.apply-result ul { list-style: none; padding: 0; margin: 0 0 6px; }
+.apply-result li { font-family: var(--f-mono); font-size: 11px; color: #cdd5e0; padding: 2px 0; }
+.apply-result .ok { color: #6ee7b7; }
+.apply-result .ng { color: #fca5a5; }
+
+/* =========================================================================
+   Main
+   ========================================================================= */
+
+.main {
+  padding: 28px 36px 80px;
+  max-width: 1400px;
+  /* CSS Grid のグリッドアイテムは既定で min-width: auto となり、
+     内部コンテンツ (長い文字列を含むテーブル等) の最小幅未満には
+     縮まらない。これにより横幅の狭い画面でページ自体がビューポートを
+     はみ出してしまうため、明示的に 0 にして正しく縮小できるようにする。*/
+  min-width: 0;
+}
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--c-border);
+  padding-bottom: 16px;
+  margin-bottom: 24px;
+}
+.page-head h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.page-body { }
+
+/* =========================================================================
+   Buttons
+   ========================================================================= */
+
+.btn {
+  display: inline-block;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  background: var(--c-surface);
+  color: var(--c-text);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: all 0.12s;
+  text-decoration: none;
+  line-height: 1.4;
+}
+.btn:hover {
+  background: var(--c-surface-2);
+  border-color: #c8ccd4;
+  text-decoration: none;
+}
+.btn--primary {
+  background: var(--c-primary);
+  color: #fff;
+  border-color: var(--c-primary);
+}
+.btn--primary:hover {
+  background: var(--c-primary-dark);
+  border-color: var(--c-primary-dark);
+  color: #fff;
+}
+.btn--danger {
+  color: var(--c-danger);
+  border-color: #e8c0bd;
+}
+.btn--danger:hover {
+  background: #fef2f2;
+  border-color: var(--c-danger);
+}
+.btn--small { padding: 4px 10px; font-size: 12px; }
+.btn--block { width: 100%; }
+
+/* =========================================================================
+   Cards / Stats
+   ========================================================================= */
+
+.grid--cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+.card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  padding: 18px 20px;
+  position: relative;
+  box-shadow: var(--shadow-sm);
+}
+.card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.card h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-muted);
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+.card__chip {
+  font-size: 10px;
+  background: var(--c-primary-soft);
+  color: var(--c-primary-dark);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.card .stat {
+  font-family: var(--f-mono);
+  font-size: 32px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  line-height: 1;
+}
+.card footer {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--c-text-muted);
+}
+.card__link {
+  position: absolute;
+  bottom: 16px;
+  right: 20px;
+  font-size: 12px;
+  color: var(--c-primary);
+}
+
+.panel {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  padding: 20px 24px;
+}
+.panel__head h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.howto {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--c-text-muted);
+}
+.howto li { margin: 4px 0; }
+.howto strong { color: var(--c-text); }
+.howto code {
+  background: var(--c-surface-2);
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--c-border-soft);
+}
+
+/* =========================================================================
+   Tables
+   ========================================================================= */
+
+.data-table {
+  width: 100%;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  font-size: 13px;
+}
+.data-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c-text-muted);
+  background: var(--c-surface-2);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--c-border);
+}
+.data-table td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--c-border-soft);
+  vertical-align: middle;
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tbody tr:hover { background: var(--c-surface-2); }
+.data-table .actions { text-align: right; white-space: nowrap; }
+.data-table .actions .btn + form { margin-left: 4px; }
+.data-table td.compact { font-size: 11.5px; color: var(--c-text-muted); }
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+}
+.badge--ok { background: #dcfce7; color: var(--c-success); }
+.badge--off { background: #f3f4f6; color: var(--c-text-muted); }
+.badge--warn { background: #fef3c7; color: var(--c-warn); }
+.badge--neutral {
+  background: #eef2f7;
+  color: #475569;
+  border: 1px solid #d1d9e3;
+  font-family: var(--f-mono);
+  text-transform: lowercase;
+}
+.badge--hikari {
+  background: linear-gradient(135deg, #fff4d6 0%, #ffe7b3 100%);
+  color: #92400e;
+  border: 1px solid #f4cc7e;
+  font-weight: 700;
+}
+
+/* =========================================================================
+   Forms
+   ========================================================================= */
+
+.form-grid {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  padding: 6px 24px 4px;
+  max-width: 920px;
+}
+.form-section {
+  border: none;
+  border-top: 1px solid var(--c-border-soft);
+  padding: 18px 0;
+  margin: 0;
+  /* fieldset はブラウザの既定挙動として、中身に応じた最小幅を
+     強制的に持ってしまう (CSS Grid の min-width:auto と同種の問題)。
+     明示的に 0 にして、狭い画面で正しく縮小できるようにする。 */
+  min-width: 0;
+}
+.form-section:first-of-type { border-top: none; }
+.form-section legend {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--c-primary);
+  padding: 0 8px 6px 0;
+  margin-bottom: 4px;
+}
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 24px;
+  margin-bottom: 12px;
+}
+.form-row + .field,
+.field + .form-row,
+.field + .field { margin-top: 12px; }
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.field__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+.field__label .req {
+  color: var(--c-danger);
+  margin-left: 2px;
+  font-style: normal;
+}
+.field__input,
+.field__select {
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  background: var(--c-surface);
+  color: var(--c-text);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  transition: border-color 0.12s, box-shadow 0.12s;
+  width: 100%;
+}
+.field__input--mono { font-family: var(--f-mono); }
+.field__input:focus,
+.field__select:focus {
+  outline: none;
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 3px rgba(13, 110, 99, 0.15);
+}
+/* 入力エラーの赤枠。
+   以前は :invalid:not(:placeholder-shown) だけを見ていたが、
+   **placeholder が付いていない入力欄では :placeholder-shown が常に
+   偽になる**ため、必須項目が空のまま「ページを開いた瞬間から赤枠」に
+   なっていた (ログイン画面など)。まだ何も入力していないのにエラー
+   表示になるのは分かりにくいので、ユーザーが実際に触った後だけ
+   赤くする :user-invalid を使う。
+   :user-invalid に対応していない古いブラウザ向けに、placeholder が
+   ある欄については従来の指定も残す。 */
+.field__input:user-invalid,
+.field__input[placeholder]:invalid:not(:placeholder-shown) {
+  border-color: var(--c-danger);
+}
+.field__select {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--c-text-muted) 50%),
+    linear-gradient(135deg, var(--c-text-muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) center, calc(100% - 9px) center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px;
+}
+.field__help {
+  font-size: 11.5px;
+  color: var(--c-text-subtle);
+  line-height: 1.4;
+}
+
+/* Toggle */
+.field--toggle .toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+.toggle input { display: none; }
+.toggle__track {
+  display: inline-block;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: #d1d5db;
+  position: relative;
+  transition: background 0.18s;
+  flex-shrink: 0;
+}
+.toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: white;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  transition: left 0.18s;
+}
+.toggle input:checked + .toggle__track {
+  background: var(--c-primary);
+}
+.toggle input:checked + .toggle__track .toggle__thumb {
+  left: 18px;
+}
+.toggle__hint {
+  font-size: 12px;
+  color: var(--c-text-muted);
+  font-weight: 500;
+}
+.toggle input:checked ~ .toggle__hint::before { content: ""; }
+
+.form-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 18px 0 18px;
+  border-top: 1px solid var(--c-border-soft);
+  margin-top: 8px;
+}
+
+.form-hint {
+  font-size: 12px;
+  color: var(--c-text-muted);
+  margin: 0 0 8px;
+}
+
+/* Pattern preset chips */
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--c-text);
+  transition: all 0.12s;
+}
+.chip:hover {
+  border-color: var(--c-primary);
+  background: white;
+}
+.chip code {
+  display: block;
+  font-size: 11px;
+  color: var(--c-primary-dark);
+  margin-top: 2px;
+}
+
+/* .chip の内線/音源選択チェックボックス用バリアント。
+   既定の .chip は「1行目ラベル・2行目 code」の縦積み前提 (プリセット
+   ボタン用) だが、チェックボックス + 単一ラベルの場合は横並びの方が
+   自然なので、このクラスを併用した場合だけレイアウトを上書きする。*/
+.chip--check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.chip--check input[type="checkbox"] {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+/* Errors */
+.errors {
+  background: #fef2f2;
+  border: 1px solid #fbbcb6;
+  border-radius: var(--r-sm);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  color: var(--c-danger);
+  font-size: 13px;
+}
+.errors strong { display: block; margin-bottom: 6px; }
+.errors ul { margin: 0; padding-left: 18px; }
+.errors code {
+  background: rgba(180, 35, 24, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* Notice (成功・情報メッセージ。.errors と同じ形で色だけ変える) */
+.notice {
+  background: #f0fdf4;
+  border: 1px solid #a7d8bb;
+  border-radius: var(--r-sm);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  color: #17693b;
+  font-size: 13px;
+}
+.notice strong { display: block; margin-bottom: 6px; }
+.notice code {
+  background: rgba(23, 105, 59, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* 注意喚起 (未検証の機能など。エラーではないので赤は使わない) */
+.notice--warn {
+  background: #fff8ec;
+  border-color: #f0c78a;
+  color: #7a4a06;
+}
+.notice--warn code { background: rgba(122, 74, 6, 0.08); }
+
+/* Empty */
+.empty {
+  background: var(--c-surface);
+  border: 1px dashed var(--c-border);
+  border-radius: var(--r-md);
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--c-text-muted);
+}
+.empty p { margin: 0 0 14px; }
+.empty__hint { font-size: 12px; color: var(--c-text-subtle); }
+
+/* =========================================================================
+   テーブルの横スクロール対応 (狭い画面で列が押し潰されて縦書き状態に
+   なってしまうのを防ぐ)。
+
+   以前は .data-table 自身に display:block + overflow-x:auto を指定して
+   いたが、table を block にすると **行 (tr) が table 幅まで広がらなく
+   なる**。その結果、広い画面では外枠だけ画面幅いっぱいで中身の罫線は
+   途中で切れる、という崩れた見た目になっていた。
+   スクロールは親の .panel 側に持たせ、table は本来の display:table の
+   ままにしておく。min-width で列が潰れる前にスクロールが始まる。
+   ========================================================================= */
+/* 表を囲むスクロールコンテナ。スマホ幅ではここが横スクロールする。
+   table 自身をスクロールさせない (display:block にすると行が広がらない) */
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.data-table {
+  display: table;
+  width: 100%;
+  min-width: 560px;
+}
+.data-table th { white-space: nowrap; }
+
+/* =========================================================================
+   ハンバーガーメニュー (スマホ幅でサイドバーを開閉式にする)
+   ========================================================================= */
+.nav-toggle-checkbox {
+  position: absolute;
+  display: block;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.nav-toggle-btn {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 40;
+  padding: 9px 14px 9px 12px;
+  border-radius: var(--r-sm);
+  background: var(--c-sidebar);
+  box-shadow: var(--shadow-md);
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.nav-toggle-icon {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 18px;
+}
+.nav-toggle-icon span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: #fff;
+  border-radius: 2px;
+  transition: transform 0.15s, opacity 0.15s;
+}
+.nav-toggle-text { color: #fff; font-size: 13px; font-weight: 600; }
+.nav-toggle-text--close { display: none; }
+.nav-toggle-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 14, 20, 0.5);
+  z-index: 25;
+}
+
+/* responsive — tablet / mobile */
+@media (max-width: 900px) {
+  body { grid-template-columns: 1fr; }
+
+  .nav-toggle-btn { display: flex; }
+
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 260px;
+    max-width: 82vw;
+    z-index: 30;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: var(--shadow-md);
+  }
+  /* checkbox hack: チェック時にサイドバーをスライドイン + オーバーレイ表示。
+     ページ遷移すると checkbox は必ず未選択状態に戻るため、リンクを
+     押せば自然にメニューが閉じる。 */
+  .nav-toggle-checkbox:checked ~ .nav-toggle-overlay { display: block; }
+  .nav-toggle-checkbox:checked ~ .sidebar { transform: translateX(0); }
+  /* ハンバーガーボタンは position:fixed でサイドバーの上に重なって
+     表示されるため、開いた状態ではサイドバー先頭のブランドロゴ文字
+     ("Asterisk PBX MANAGER") がボタンの背後からはみ出して見えて
+     しまう。ブランド部分をボタンの高さ分だけ下にずらして避ける。*/
+  .nav-toggle-checkbox:checked ~ .sidebar .brand { padding-top: 60px; }
+  .nav-toggle-checkbox:checked ~ .nav-toggle-btn .nav-toggle-icon span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+  .nav-toggle-checkbox:checked ~ .nav-toggle-btn .nav-toggle-icon span:nth-child(2) { opacity: 0; }
+  .nav-toggle-checkbox:checked ~ .nav-toggle-btn .nav-toggle-icon span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+  .nav-toggle-checkbox:checked ~ .nav-toggle-btn .nav-toggle-text--open { display: none; }
+  .nav-toggle-checkbox:checked ~ .nav-toggle-btn .nav-toggle-text--close { display: inline; }
+
+  .main { padding: 64px 16px 60px; }
+  .form-row { grid-template-columns: 1fr; }
+
+  .page-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .page-head h1 { font-size: 19px; }
+}
+
+@media (max-width: 560px) {
+  html, body { font-size: 15px; }
+  .main { padding: 60px 12px 50px; }
+  .grid--cards { grid-template-columns: 1fr; }
+  .card .stat { font-size: 26px; }
+  .btn { padding: 9px 14px; }             /* タップ領域を少し広めに */
+  .data-table .actions .btn { margin-bottom: 4px; }
+
+  /* iOS Safari は input の font-size が 16px 未満だとフォーカス時に
+     自動ズームしてしまう。狭い画面ではズームを避けたいので 16px 以上に。
+     PC 幅では従来通りコンパクトな 13px のまま (ズームの影響が無いため)。*/
+  .field__input, .field__select, textarea.field__input {
+    font-size: 16px;
+  }
+}
+
+/* ========== 年間カレンダー (スケジュール設定) ========== */
+.cal-grid {
+  display: grid;
+  /* 4ヶ月 × 3段 で表示する */
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+  min-width: 900px;   /* 狭い画面では横スクロールさせる */
+}
+@media (max-width: 900px) {
+  /* スマホ等では 2列 × 6段 に落とす */
+  .cal-grid { grid-template-columns: repeat(2, 1fr); min-width: 460px; }
+}
+.cal-month {
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  padding: 8px;
+  background: #fff;
+}
+.cal-month__title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: var(--c-text);
+}
+.cal-week, .cal-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.cal-wd {
+  text-align: center;
+  font-size: 11px;
+  color: var(--c-text-muted, #666);
+  padding: 2px 0;
+}
+.cal-day {
+  min-height: 30px;
+  border-radius: 3px;
+  padding: 2px;
+  font-size: 11px;
+  text-align: center;
+  cursor: pointer;
+  line-height: 1.2;
+  border: 1px solid transparent;
+}
+.cal-day:hover { outline: 2px solid var(--c-accent, #0d7a4f); }
+.cal-empty { cursor: default; background: transparent; }
+.cal-empty:hover { outline: none; }
+.cal-num { display: block; }
+.cal-label {
+  display: block;
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 区分ごとの色分け */
+.cal-weekday { background: #f8fafc; color: #334155; }
+.cal-weekend { background: #e2e8f0; color: #475569; }
+.cal-holiday { background: #fee2e2; color: #b42318; }
+.cal-company { background: #dbeafe; color: #1d4ed8; }
+
+.cal-legend {
+  display: inline-block;
+  padding: 2px 10px;
+  margin-right: 8px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+/* カレンダーの日付選択パレット */
+.cal-palette {
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: #f8fafc;
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+.cal-day.cal-selected {
+  outline: 3px solid var(--c-accent, #0d7a4f);
+  outline-offset: -1px;
+  font-weight: 600;
+}
+
+
+/* ========== 曜日パターン表をスリムに ========== */
+.table--slim .field__select,
+.table--slim .field__input {
+  padding: 4px 6px;
+  font-size: 12px;
+  min-height: 0;
+}
+.table--slim td { padding: 4px 6px; vertical-align: middle; }
+.table--slim th { padding: 6px; font-size: 12px; white-space: nowrap; }
+.table--slim .cell-check {
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.3;
+}
+.table--slim .cell-check input[type="checkbox"] { margin: 0 0 2px; }
+
+/* ========== 発着信履歴 ========== */
+.tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--c-border); }
+.tab {
+  padding: 8px 20px;
+  text-decoration: none;
+  color: var(--c-text);
+  border: 1px solid var(--c-border);
+  border-bottom: none;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: #f1f5f9;
+  font-size: 14px;
+}
+.tab.is-active {
+  background: #fff;
+  font-weight: 600;
+  border-bottom: 2px solid #fff;
+  margin-bottom: -2px;
+}
+
+/* 三点リーダのサブメニュー */
+.submenu { position: relative; display: inline-block; }
+.submenu > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.submenu > summary::-webkit-details-marker { display: none; }
+.submenu__panel {
+  /* テーブルの overflow:hidden に切り取られないよう、画面基準で
+     配置する (位置は JS が summary の座標に合わせて設定する)。
+     absolute のままだと下の行ほどメニューが見切れてしまう。 */
+  position: fixed;
+  z-index: 100;
+  width: 260px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  text-align: left;
+}
+.submenu__num {
+  margin: 0 0 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.submenu__sep { margin: 12px 0; border: 0; border-top: 1px solid var(--c-border); }
+.submenu__done { margin: 4px 0; font-size: 12px; color: var(--c-text-muted, #666); }
+.submenu__panel .field { margin-bottom: 8px; }
+
+/* =========================================================================
+   ログイン画面
+   ========================================================================= */
+
+.login-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  margin: 0;
+  padding: 24px 16px;
+  background: var(--c-sidebar);
+  font-family: var(--f-sans);
+  color: var(--c-text);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--c-surface);
+  border-radius: var(--r-lg);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  padding: 28px 26px 22px;
+}
+
+.login-card__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.login-card__title { font-weight: 700; font-size: 16px; }
+.login-card__sub { color: var(--c-text-muted); font-size: 13px; margin-top: 2px; }
+
+.login-card__form { display: flex; flex-direction: column; gap: 14px; }
+.login-card__form .btn { margin-top: 6px; }
+
+.login-card__error {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: #fdecea;
+  border: 1px solid #f5c6c2;
+  color: var(--c-danger);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.login-card__note {
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--c-border-soft);
+  color: var(--c-text-subtle);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+/* =========================================================================
+   認証なしで動作しているときの警告帯
+   ========================================================================= */
+
+.auth-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: #fff4e5;
+  border: 1px solid #f0c78a;
+  color: #7a4a06;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.auth-warning strong { font-weight: 700; }
+.auth-warning code {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--f-mono);
+  font-size: 12px;
+}
+
+/* サイドバー下部のログアウト */
+.sidebar__user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--c-sidebar-mute);
+  font-size: 12px;
+}
+
+.sidebar__user a {
+  color: var(--c-sidebar-text);
+  text-decoration: none;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--r-sm);
+  padding: 3px 9px;
+}
+
+.sidebar__user a:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}

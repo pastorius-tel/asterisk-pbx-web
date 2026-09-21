@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_select, errors_block %}
+
+{% block content %}
+
+{% if error_message %}
+<div class="errors" role="alert">
+  <strong>{{ error_message }}</strong>
+  {% if error_detail %}
+    <details><summary>詳細</summary><pre style="white-space:pre-wrap;font-size:11px;">{{ error_detail }}</pre></details>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if not ffmpeg_ok %}
+<div class="errors" role="alert">
+  <strong>ffmpeg が利用できません。</strong>
+  音源アップロードは可能ですが、変換は失敗します。
+</div>
+{% endif %}
+
+<form method="post" action="/audio/" enctype="multipart/form-data" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>音源情報</legend>
+    {{ field_text("name", "表示名",
+                  item=None, submitted=submitted, required=True,
+                  placeholder="昼間用 保留音",
+                  help="管理画面で表示される名前。") }}
+    {{ field_select("category", "カテゴリ", audio_categories,
+                    item=None, submitted=submitted, required=True,
+                    help="moh=保留音 / park=パーク音 / ivr=IVRガイダンス / voicemail=VM挨拶 / custom=その他") }}
+    {{ field_text("note", "メモ", item=None, submitted=submitted) }}
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>ファイル</legend>
+    <label class="field">
+      <span class="field__label">音源ファイル<em class="req">*</em></span>
+      <input class="field__input" type="file" name="file" required
+             accept=".mp3,.wav,.m4a,.ogg,.flac,.aac">
+      <small class="field__help">
+        対応形式: MP3 / WAV / M4A / OGG / FLAC / AAC<br>
+        アップロード後、自動的に <strong>WAV 16bit mono 8000Hz</strong> に変換され、Asterisk から直接再生可能になります。
+      </small>
+    </label>
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/audio/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">アップロード + 変換</button>
+  </div>
+</form>
+{% endblock %}

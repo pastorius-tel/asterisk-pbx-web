@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_select, field_toggle, errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+<form method="post" action="{{ form_action }}" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>番号</legend>
+    {{ field_text("pattern", "番号 / パターン", item=item, submitted=submitted, required=True,
+                  placeholder="0312345678", monospace=True,
+                  help="完全な番号 (例: 0312345678) か、先頭に _ を付けたパターン (例: _03XXXXXXXX で03から始まる10桁全体、_0AAAABBBBCC で末尾一致等) を指定できます。X=数字1桁、Z=1-9、N=2-9。") }}
+    <div class="form-row">
+      {{ field_toggle("enabled", "有効化", item=item, submitted=submitted, default=True) }}
+    </div>
+    {{ field_text("note", "メモ (理由等)", item=item, submitted=submitted, placeholder="しつこい勧誘") }}
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>該当した場合の処理</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">処理<em class="req">*</em></span>
+        <select class="field__select" name="action" id="bn_action">
+          <option value="hangup" {% if (item and item.action == "hangup") or (submitted and submitted.action == "hangup") or not item %}selected{% endif %}>即切断</option>
+          <option value="voicemail" {% if (item and item.action == "voicemail") or (submitted and submitted.action == "voicemail") %}selected{% endif %}>留守番電話へ転送</option>
+        </select>
+      </label>
+      {{ field_select("voicemail_target", "転送先内線 (留守番電話へ転送を選んだ場合)", ext_choices,
+                      item=item, submitted=submitted, allow_empty=True) }}
+    </div>
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/blocked-numbers/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+{% endblock %}

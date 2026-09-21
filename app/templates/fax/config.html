@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_toggle %}
+
+{% block actions %}
+<a href="/fax/" class="btn">← FAX 一覧へ</a>
+{% endblock %}
+
+{% block content %}
+
+<form method="post" action="/fax/config" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>基本設定</legend>
+    <div class="form-row">
+      {{ field_toggle("enabled", "FAX 機能を有効化", item=cfg,
+         help="有効にして「変更を Asterisk へ反映」すると受信ダイヤルプランが生成されます。") }}
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">FAX 受信 DID 番号</span>
+        <input class="field__input field__input--mono" name="fax_did_number"
+               value="{{ cfg.fax_did_number or '' }}" placeholder="0312345679">
+        <small class="field__help">この契約番号宛の着信を FAX 受信にします。着信ルートで転送先「FAX」を選んでも可。</small>
+      </label>
+      <label class="field">
+        <span class="field__label">FAX 受信テスト内線</span>
+        <input class="field__input field__input--mono" name="fax_extension"
+               value="{{ cfg.fax_extension or '9000' }}" placeholder="9000">
+        <small class="field__help">内線からこの番号にかけると ReceiveFAX が起動 (動作確認用)。</small>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">自局 FAX 番号 (CSID)</span>
+        <input class="field__input field__input--mono" name="station_id"
+               value="{{ cfg.station_id or '' }}" placeholder="0312345678">
+        <small class="field__help">送信時に相手に通知される自局番号。通常は契約電話番号。</small>
+      </label>
+      <label class="field">
+        <span class="field__label">送信ヘッダー文字列</span>
+        <input class="field__input" name="header_text"
+               value="{{ cfg.header_text or '' }}" placeholder="株式会社サンプル">
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">最小ボーレート (bps)</span>
+        <select class="field__select" name="minrate">
+          {% for r in [2400, 4800, 7200, 9600, 12000, 14400] %}
+          <option value="{{ r }}" {% if (cfg.minrate or 4800) == r %}selected{% endif %}>{{ r }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field">
+        <span class="field__label">最大ボーレート (bps)</span>
+        <select class="field__select" name="maxrate">
+          {% for r in [2400, 4800, 7200, 9600, 12000, 14400] %}
+          <option value="{{ r }}" {% if (cfg.maxrate or 14400) == r %}selected{% endif %}>{{ r }}</option>
+          {% endfor %}
+        </select>
+        <small class="field__help">
+          既定は 4800〜14400。T.38 が使えず音声 (G.711) パススルーのみの
+          回線でネゴシエーションが不安定な場合、最大値を 9600 や 7200 に
+          下げると安定することがあります。
+        </small>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field field--toggle">
+        <span class="field__label">ECM (エラー訂正) を使う</span>
+        <span class="toggle">
+          <input type="checkbox" name="ecm_enabled" value="on"
+                 {% if cfg.ecm_enabled %}checked{% endif %}>
+          <span class="toggle__track"><span class="toggle__thumb"></span></span>
+          <span class="toggle__hint">{% if cfg.ecm_enabled %}有効{% else %}無効{% endif %}</span>
+        </span>
+        <small class="field__help">
+          <strong>複数ページの FAX で 2 ページ目以降が受信できない場合は、
+          これを無効にしてみてください。</strong>
+          ECM はデータを誤りなく送る仕組みですが、T.38 が使えず音声
+          (G.711) モードで受信している回線では、再送に失敗してページが
+          欠落することがあります (Asterisk のログに
+          <code>T.30 ECM carrier not found</code> が多発している場合が
+          該当します)。無効にすると画質はわずかに落ちますが、受信の
+          確実性が上がります。
+        </small>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">CNG検知の猶予時間 (秒)</span>
+        <select class="field__select" name="cng_detect_wait_seconds">
+          {% for s in [0, 1, 2, 3, 4, 5] %}
+          <option value="{{ s }}" {% if (cfg.cng_detect_wait_seconds if cfg.cng_detect_wait_seconds is not none else 2) == s %}selected{% endif %}>
+            {{ s }}{% if s == 0 %} (待機しない){% endif %}
+          </option>
+          {% endfor %}
+        </select>
+        <small class="field__help">
+          音声とFAXを共用する番号の着信時、内線を鳴らし始める前にこの
+          秒数だけ待ってから鳴らします。これにより、FAX着信時にCNG検知
+          が完了する前の「一瞬の鳴音」を防げます。ただし通常の音声着信
+          でも同じだけ呼び出し開始が遅れます。既定は2秒。0にすると
+          この待機を行いません (FAX機能が無効な場合も待機しません)。
+        </small>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">受信ファイル名パターン</span>
+        <input class="field__input field__input--mono" name="filename_pattern_recv"
+               value="{{ cfg.filename_pattern_recv or '受信FAX_{datetime}_{peer}' }}">
+      </label>
+      <label class="field">
+        <span class="field__label">送信ファイル名パターン</span>
+        <input class="field__input field__input--mono" name="filename_pattern_send"
+               value="{{ cfg.filename_pattern_send or '送信FAX_{datetime}_{peer}' }}">
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">ファイル名の日時書式</span>
+        <input class="field__input field__input--mono" name="filename_datetime_format"
+               value="{{ cfg.filename_datetime_format or '%Y%m%d_%H%M' }}">
+        <small class="field__help">
+          Python の strftime 書式。例: %Y%m%d_%H%M → 20260817_1030 /
+          %Y-%m-%d_%H-%M-%S → 2026-08-17_10-30-05<br>
+          ファイル名パターン欄では <code>{datetime}</code> と
+          <code>{peer}</code> (相手番号) が使えます。拡張子 .pdf は自動で
+          付きます。
+        </small>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">メモ</span>
+        <input class="field__input" name="note" value="{{ cfg.note or '' }}">
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>受信 FAX の処理 (複数選択可)</legend>
+    <p class="form-hint">
+      受信した FAX をどう扱うか選びます。複数チェックすると同時に実行されます。
+      詳細は各設定ボタンから設定してください。
+    </p>
+
+    <div class="form-row">
+      <label class="field field--toggle">
+        <span class="field__label">[メール] 添付して通知する</span>
+        <span class="toggle">
+          <input type="checkbox" name="deliver_mail" {% if cfg.deliver_mail %}checked{% endif %}>
+          <span class="toggle__track"><span class="toggle__thumb"></span></span>
+          <span class="toggle__hint">{{ "有効" if cfg.deliver_mail else "無効" }}</span>
+        </span>
+        <small class="field__help">
+          着信番号・受信時刻を本文に、PDF を添付して送信。
+          {% if cfg.smtp_host %}
+            <span style="color:#1a7f37">設定済: {{ cfg.smtp_host }} → {{ cfg.mail_to or '(宛先未設定)' }}</span>
+          {% else %}
+            <span style="color:#b42318">未設定 (右下のメール設定ボタンから設定)</span>
+          {% endif %}
+        </small>
+      </label>
+    </div>
+
+    <div class="form-row">
+      <label class="field field--toggle">
+        <span class="field__label">[外部保存] SMB サーバーに PDF 保存する</span>
+        <span class="toggle">
+          <input type="checkbox" name="deliver_smb" {% if cfg.deliver_smb %}checked{% endif %}>
+          <span class="toggle__track"><span class="toggle__thumb"></span></span>
+          <span class="toggle__hint">{{ "有効" if cfg.deliver_smb else "無効" }}</span>
+        </span>
+        <small class="field__help">
+          Windows 共有 / NAS に PDF を保存。
+          {% if cfg.smb_server %}
+            <span style="color:#1a7f37">設定済: \\{{ cfg.smb_server }}\{{ cfg.smb_share }}{% if cfg.smb_path %}\{{ cfg.smb_path }}{% endif %}</span>
+          {% else %}
+            <span style="color:#b42318">未設定 (右下の外部保存設定ボタンから設定)</span>
+          {% endif %}
+        </small>
+      </label>
+    </div>
+
+    <div class="form-row">
+      {{ field_toggle("deliver_local", "[ローカル] 本サーバーにも保存する", item=cfg,
+         help="本ツールのサーバー内に保存し、FAX 一覧からダウンロード可能にします。メール/SMB が両方失敗した場合は、この設定に関わらず復旧用にローカル保存されます。") }}
+    </div>
+
+    <div class="form-foot" style="gap:8px;flex-wrap:wrap;">
+      <a href="/fax/config/mail" class="btn">メール設定を開く ▸</a>
+      <a href="/fax/config/smb" class="btn">外部保存 (SMB) 設定を開く ▸</a>
+    </div>
+  </fieldset>
+
+  <div class="form-foot">
+    <button type="submit" class="btn btn--primary">この画面の設定を保存</button>
+  </div>
+</form>
+
+<p class="form-hint" style="margin-top:16px;">
+  設定保存後、ダッシュボードの「変更を Asterisk へ反映」を押すと FAX 受信ダイヤルプランが
+  <code>extensions.conf</code> に生成されます。
+</p>
+
+{% endblock %}

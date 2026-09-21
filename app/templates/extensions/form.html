@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_number, field_select, field_toggle, errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+<form method="post" action="{{ form_action }}" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>基本情報</legend>
+    <div class="form-row">
+      {{ field_text("extension", "内線番号", item=item, submitted=submitted, required=True,
+                    placeholder="201" if reserve_leading_01_for_outbound else "1001",
+                    pattern="\\d{2,10}",
+                    help=("2〜10 桁の数字。先頭は2〜9 (0/1始まりは外線発信用に予約されています。「システム」画面で変更可)。組織内で一意。" if reserve_leading_01_for_outbound else "2〜10 桁の数字。組織内で一意。"),
+                    monospace=True) }}
+      {{ field_text("display_name", "表示名", item=item, submitted=submitted, required=True,
+                    placeholder="営業部 山田") }}
+    </div>
+    <div class="form-row">
+      {{ field_text("secret", "SIP パスワード", item=item, submitted=submitted, default=auto_secret,
+                    required=True, monospace=True,
+                    help="自動生成済み。必要なら書き換え可能。") }}
+      {{ field_text("context", "コンテキスト", item=item, submitted=submitted, default="from-internal",
+                    help="ダイヤルプランのコンテキスト名。") }}
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>SIP / メディア</legend>
+    <div class="form-row">
+      {{ field_select("transport", "トランスポート", transports,
+                      item=item, submitted=submitted, default="udp", required=True) }}
+      {{ field_select("dtmf_mode", "DTMF モード", dtmf_modes,
+                      item=item, submitted=submitted, default="rfc4733", required=True) }}
+    </div>
+    <div class="form-row">
+      {{ field_select("codec_primary", "コーデック (第 1)", codecs,
+                      item=item, submitted=submitted, default="ulaw", required=True) }}
+      {{ field_select("codec_secondary", "コーデック (第 2)", codecs,
+                      item=item, submitted=submitted, allow_empty=True,
+                      help="未選択でフォールバックなし。") }}
+    </div>
+    <div class="form-row">
+      {{ field_select("nat_mode", "NAT モード", nat_modes,
+                      item=item, submitted=submitted, default="force_rport,comedia", required=True,
+                      help="LAN 内のみなら no、外部接続が混じるなら force_rport,comedia 推奨。") }}
+      {{ field_select("direct_media", "Direct Media", direct_media,
+                      item=item, submitted=submitted, default="no", required=True,
+                      help="メディアを端末同士で直接流すか。") }}
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>機能</legend>
+    <div class="form-row">
+      {{ field_toggle("voicemail_enabled", "ボイスメール",
+                      item=item, submitted=submitted, default=False) }}
+      {{ field_text("voicemail_pin", "ボイスメール PIN",
+                    item=item, submitted=submitted, pattern="\\d{4,16}", monospace=True,
+                    help="4 桁以上の数字。*97 で留守電を聞くときの暗証番号。") }}
+    </div>
+    <div class="form-row">
+      {{ field_text("voicemail_email", "録音通知メール (任意)",
+                    item=item, submitted=submitted, monospace=True,
+                    help="留守電録音時にこのアドレスへ通知。カンマ区切りで複数可。空欄なら通知なし。") }}
+    </div>
+    <div class="form-row">
+      {{ field_toggle("voicemail_attach", "メールに音声を添付",
+                      item=item, submitted=submitted, default=True) }}
+      {{ field_toggle("voicemail_delete_after_email", "メール送信後にサーバーの録音を削除",
+                      item=item, submitted=submitted, default=False) }}
+    </div>
+    <p class="form-hint">
+      留守電の聞き方: 内線電話から <code>*97</code> をダイヤル
+      (PIN 入力)。他人の番号を指定して聞くには <code>*98</code>。
+      「録音通知メール」を設定すると録音時にメール送信されます
+      (Asterisk のメール送信機能を使用。サーバーに sendmail/msmtp 等の
+      MTA 設定が必要)。「送信後に削除」を有効にするとメールのみの運用
+      (<code>*97</code> では聞けなくなる) になります。
+    </p>
+
+    <div class="form-row">
+      {{ field_select("no_answer_audio_id", "応答しなかったときに流す音源", voicemail_audio_choices,
+                      item=item, submitted=submitted, allow_empty=True,
+                      help="呼び出しても応答しなかった場合に再生します。未設定なら何も再生せず、下の動作にそのまま進みます。") }}
+      <label class="field">
+        <span class="field__label">音源を流した後の動作</span>
+        <select class="field__select" name="no_answer_action">
+          <option value="voicemail"
+            {% if (item and item.no_answer_action == "voicemail") or (submitted and submitted.no_answer_action == "voicemail") or (not item and not submitted) %}selected{% endif %}>
+            留守番電話に録音する
+          </option>
+          <option value="hangup"
+            {% if (item and item.no_answer_action == "hangup") or (submitted and submitted.no_answer_action == "hangup") %}selected{% endif %}>
+            切断する (録音しない)
+          </option>
+        </select>
+        <small class="field__help">
+          「録音する」を選ぶ場合は、上の「ボイスメール」も有効にしてください。
+        </small>
+      </label>
+    </div>
+    <p class="form-hint">
+      この設定は、<strong>内線同士の通話でも外線からの着信でも</strong>
+      適用されます (着信ルート側で「応答なし時」を個別に指定している
+      場合は、そちらが優先されます)。
+    </p>
+
+    <div class="form-row">
+      {{ field_toggle("voicemail_only", "留守番電話専用内線にする",
+                      item=item, submitted=submitted, default=False,
+                      help="電話機を接続しない、応答専用の内線になります。着信すると呼び出しを行わず、すぐに応答メッセージを再生します。") }}
+      <label class="field">
+        <span class="field__label">留守番電話専用内線の動作</span>
+        <select class="field__select" name="voicemail_only_mode">
+          <option value="record"
+            {% if (item and item.voicemail_only_mode == "record") or (submitted and submitted.voicemail_only_mode == "record") or (not item and not submitted) %}selected{% endif %}>
+            応答メッセージを再生して録音する
+          </option>
+          <option value="announce"
+            {% if (item and item.voicemail_only_mode == "announce") or (submitted and submitted.voicemail_only_mode == "announce") %}selected{% endif %}>
+            応答メッセージを再生するだけ (録音しない)
+          </option>
+        </select>
+        <small class="field__help">
+          「録音しない」は営業時間外・移転案内など、用件を受け付けない
+          場合に使います。案内を流したあと自動的に切断します。
+        </small>
+      </label>
+    </div>
+    <div class="form-row">
+      {{ field_select("voicemail_greeting_audio_id", "応答メッセージの音源", voicemail_audio_choices,
+                      item=item, submitted=submitted, allow_empty=True,
+                      help="「音源」画面で登録した音声から選びます (「文章から音声を作る」で作成できます)。未設定の場合、録音するときは Asterisk 既定の案内、録音しないときは既定の終話案内が流れます。") }}
+    </div>
+    <p class="form-hint">
+      <strong>留守番電話専用内線の使い方</strong>:
+      この内線には電話機を接続しません。着信ルートや時間条件・IVR の
+      転送先としてこの内線を指定すると、着信がそのまま応答メッセージに
+      つながります。録音した内容は通常の留守番電話と同じく
+      「留守番電話」画面や通知メールで確認できます
+      (録音するモードの場合は「ボイスメール」も有効にしてください)。
+    </p>
+    <div class="form-row">
+      {{ field_toggle("call_waiting", "コールウェイティング",
+                      item=item, submitted=submitted, default=True) }}
+      {{ field_number("max_contacts", "同時登録端末数",
+                      item=item, submitted=submitted, default=1, min=1, max=20,
+                      help="同じ内線を複数台で使う場合に増やす。") }}
+    </div>
+    <div class="form-row">
+      {{ field_text("pickup_group", "ピックアップグループ",
+                    item=item, submitted=submitted, monospace=True,
+                    help="例: 1 (同じグループ内の鳴っている端末を取れる)") }}
+      {{ field_text("callgroup", "コールグループ",
+                    item=item, submitted=submitted, monospace=True) }}
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>その他</legend>
+    {{ field_toggle("enabled", "この内線を有効化",
+                    item=item, submitted=submitted, default=True) }}
+    {{ field_text("note", "メモ", item=item, submitted=submitted, help="運用メモ (任意)") }}
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/extensions/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+{% endblock %}

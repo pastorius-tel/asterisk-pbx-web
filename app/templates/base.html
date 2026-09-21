@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title|default("PBX Manager") }} — Asterisk PBX Manager</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css?v={{ app_version }}">
+  {#
+    htmx は同梱のものを読み込む (app/static/js/htmx.min.js)。
+    以前は unpkg の CDN から読んでいたが、
+      - PBX は閉じた社内 LAN に置かれることが多く、外部へ出られないと
+        「変更を Asterisk へ反映」ボタンが動かなくなる
+      - 外部 CDN が配信内容を差し替えると、管理画面に任意のスクリプトが
+        流し込まれる (PBX の全操作権限を持つ画面なので影響が大きい)
+    という 2 つの理由からローカル配信に変更した。
+    フォントも同じ理由で端末の標準フォントにフォールバックさせている
+    (app.css の --f-sans / --f-mono に候補を列挙済み)。
+  #}
+  <script src="/static/js/htmx.min.js?v={{ app_version }}" defer></script>
+</head>
+<body>
+
+<input type="checkbox" id="nav-toggle" class="nav-toggle-checkbox">
+<label for="nav-toggle" class="nav-toggle-btn" aria-label="メニューを開閉">
+  <span class="nav-toggle-icon"><span></span><span></span><span></span></span>
+  <span class="nav-toggle-text nav-toggle-text--open">メニュー</span>
+  <span class="nav-toggle-text nav-toggle-text--close">閉じる</span>
+</label>
+<label for="nav-toggle" class="nav-toggle-overlay"></label>
+
+<aside class="sidebar">
+  <header class="brand">
+    <div class="brand__mark">A</div>
+    <div class="brand__name">Asterisk<br><small>PBX Manager</small></div>
+  </header>
+
+  <nav class="nav">
+    <a href="/" class="nav__item {% if request.url.path == '/' %}is-active{% endif %}">
+      <span class="nav__icon">▤</span>ダッシュボード
+    </a>
+
+    <div class="nav__group">基本設定</div>
+    <a href="/extensions/" class="nav__item {% if '/extensions' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">☎</span>内線
+    </a>
+    <a href="/trunks/" class="nav__item {% if '/trunks' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">⇄</span>トランク
+    </a>
+
+    <div class="nav__group">コール処理</div>
+    <a href="/outbound-routes/" class="nav__item {% if '/outbound-routes' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">↗</span>発信ルート
+    </a>
+    <a href="/inbound-routes/" class="nav__item {% if '/inbound-routes' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">↙</span>着信ルート
+    </a>
+    <a href="/call-logs/?direction=in" class="nav__item {% if '/call-logs' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">☰</span>発着信履歴
+    </a>
+    <a href="/phone-book/" class="nav__item {% if '/phone-book' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">☏</span>電話帳
+    </a>
+    <a href="/blocked-numbers/" class="nav__item {% if '/blocked-numbers' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">⊘</span>迷惑電話ブロック
+    </a>
+    <a href="/ring-groups/" class="nav__item {% if '/ring-groups' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">⊕</span>リンググループ
+    </a>
+    <a href="/queues/" class="nav__item {% if '/queues' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">≡</span>キュー
+    </a>
+    <a href="/ivrs/" class="nav__item {% if '/ivrs' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">⌬</span>IVR
+    </a>
+    <a href="/schedules/" class="nav__item {% if '/schedules' in request.url.path or '/time-conditions' in request.url.path or '/day-patterns' in request.url.path or '/calendar-exceptions' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">◷</span>スケジュール設定
+    </a>
+
+    <div class="nav__group">音源・機能</div>
+    <a href="/audio/" class="nav__item {% if '/audio' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">♫</span>音源 (MP3)
+    </a>
+    <a href="/moh-classes/" class="nav__item {% if '/moh-classes' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">♬</span>保留音クラス
+    </a>
+    <a href="/parking-lots/" class="nav__item {% if '/parking-lots' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">P</span>コールパーク
+    </a>
+    <a href="/fax/" class="nav__item {% if '/fax' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">⎙</span>FAX 送受信
+    </a>
+    <a href="/voicemail/" class="nav__item {% if '/voicemail' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">✉</span>留守番電話
+    </a>
+    <a href="/system/" class="nav__item {% if '/system' in request.url.path %}is-active{% endif %}">
+      <span class="nav__icon">⚙</span>システム
+    </a>
+  </nav>
+
+  <footer class="sidebar__foot">
+    <form hx-post="/apply" hx-target="#apply-result" hx-swap="innerHTML">
+      <button type="submit" class="btn btn--primary btn--block">
+        変更を Asterisk へ反映
+      </button>
+    </form>
+    <div id="apply-result" class="apply-result"></div>
+    {% if auth_enabled() %}
+      <div class="sidebar__user">
+        <span>{{ admin_user() }} でログイン中</span>
+        <a href="/logout">ログアウト</a>
+      </div>
+    {% endif %}
+  </footer>
+</aside>
+
+<main class="main">
+  <header class="page-head">
+    <h1>{{ title|default("") }}</h1>
+    {% block actions %}{% endblock %}
+  </header>
+
+  <section class="page-body">
+    {% if not auth_enabled() %}
+      <p class="auth-warning">
+        <strong>ログイン認証が無効です。</strong>
+        この画面に接続できる人は誰でも、内線・トランクの設定変更、留守番電話の再生、
+        発信ルートの書き換えができます。
+        <code>.env</code> に <code>ADMIN_PASSWORD</code> を設定して再起動してください。
+      </p>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </section>
+</main>
+
+</body>
+</html>

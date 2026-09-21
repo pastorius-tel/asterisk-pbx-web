@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/blocked-numbers/new" class="btn btn--primary">+ ブロック番号を追加</a>
+{% endblock %}
+
+{% block content %}
+
+<p class="form-hint">
+  登録した番号 (またはパターン) からの着信を、即切断または指定内線の
+  留守番電話へ自動的に振り分けます。<br>
+  <strong>ご注意</strong>: インターネットから迷惑電話番号を自動取得する
+  機能ではありません。信頼できる無料の一括取得手段が存在しないため
+  (トビラシステムズ等の専門事業者は有料の契約が必要です)、番号は
+  こちらで手動登録して管理してください。海外番号の一律警告/ブロックは
+  「システム」画面で別途設定できます。
+</p>
+
+{% if not items %}
+<div class="empty">
+  <p>登録されたブロック番号がありません。</p>
+  <p class="empty__hint">
+    しつこい勧誘電話などがあれば、その番号を登録してください。
+    完全な番号 (例: 0312345678) のほか、先頭に <code>_</code> を付けた
+    パターン指定 (例: <code>_03XXXXXXXX</code> で 03 から始まる 10 桁
+    全体) も使えます。
+  </p>
+  <a href="/blocked-numbers/new" class="btn btn--primary">ブロック番号を追加</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>番号/パターン</th>
+      <th>処理</th>
+      <th>メモ</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td class="mono">{{ it.pattern }}</td>
+      <td>
+        {% if it.action == "hangup" %}<span class="badge badge--err">即切断</span>
+        {% else %}<span class="badge">留守電へ ({{ it.voicemail_target }})</span>{% endif %}
+      </td>
+      <td>{{ it.note or "-" }}</td>
+      <td>
+        {% if it.enabled %}<span class="badge badge--ok">有効</span>
+        {% else %}<span class="badge badge--off">無効</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/blocked-numbers/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/blocked-numbers/{{ it.id }}/delete"
+              onsubmit="return confirm('{{ it.pattern }} をブロックリストから削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

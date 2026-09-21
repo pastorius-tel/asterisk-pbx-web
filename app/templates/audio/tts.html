@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_select, errors_block %}
+
+{% block actions %}
+<a href="/audio/" class="btn">音源一覧へ</a>
+{% endblock %}
+
+{% block content %}
+
+{% if error_message %}
+<div class="errors" role="alert">
+  <strong>{{ error_message }}</strong>
+</div>
+{% endif %}
+
+{% if install_message %}
+<div class="{% if install_ok == '1' %}notice{% else %}errors{% endif %}" role="alert">
+  <strong>{{ install_message }}</strong>
+</div>
+{% endif %}
+
+{% if not tts_ok %}
+<div class="errors" role="alert">
+  <strong>音声合成が利用できません</strong>
+  <p>{{ tts_reason }}</p>
+  <p>次のコマンドで必要なパッケージを導入できます:</p>
+  <pre><code>sudo apt install open-jtalk open-jtalk-mecab-naist-jdic hts-voice-nitech-jp-atr503-m001</code></pre>
+  <p><code>scripts/setup_dependencies.sh</code> を実行しても導入されます。</p>
+</div>
+{% endif %}
+
+<section class="panel">
+  <header class="panel__head">
+    <h2>文章から音声を作る</h2>
+  </header>
+  <p class="form-hint">
+    日本語の文章を入力すると、その読み上げ音声を自動生成して「音源」
+    として登録します。録音機材がなくても、留守番電話の応答メッセージや
+    IVR の案内文をすぐに用意できます。生成した音源は、IVR の挨拶・
+    保留音クラス・各種ガイダンスの選択肢にそのまま現れます。
+  </p>
+
+  {% if edit_id %}
+  <p class="form-hint">
+    <strong>既存の音源を作り直しています。</strong>保存すると同じ音源が
+    新しい内容で上書きされるため、この音源を使っている IVR や保留音
+    クラスの設定はそのまま引き継がれます。
+  </p>
+  {% endif %}
+
+  <form method="post" action="/audio/tts" class="form-grid" autocomplete="off">
+    {% if edit_id %}<input type="hidden" name="edit_id" value="{{ edit_id }}">{% endif %}
+    <fieldset class="form-section">
+      <legend>基本情報</legend>
+      <div class="form-row">
+        {{ field_text("name", "音源名", submitted=submitted, required=True,
+                      placeholder="営業時間外アナウンス",
+                      help="一覧や選択肢に表示される名前です。") }}
+        {{ field_select("category", "カテゴリ", audio_categories,
+                        submitted=submitted, default="ivr", required=True,
+                        help="用途に合わせて選んでください (IVR の挨拶なら ivr、留守電の案内なら voicemail 等)。") }}
+      </div>
+    </fieldset>
+
+    <fieldset class="form-section">
+      <legend>読み上げる文章</legend>
+      <label class="field">
+        <span class="field__label">文章<em class="req">*</em></span>
+        <textarea class="field__input" name="text" rows="5" required
+                  placeholder="お電話ありがとうございます。ただいま営業時間外です。恐れ入りますが、平日午前九時から午後六時までにおかけ直しください。">{{ submitted.text if submitted else "" }}</textarea>
+        <small class="field__help">
+          句読点 (、。) を入れると自然な区切りになります。数字は「九時」
+          のように漢数字で書くと正しく読まれやすいです。
+        </small>
+      </label>
+      <div class="form-row">
+        <label class="field" style="max-width:280px">
+          <span class="field__label">声 (音響モデル)</span>
+          <select class="field__select" name="voice">
+            {% for v in voices %}
+            <option value="{{ v.key }}"
+              {% if submitted and submitted.voice == v.key %}selected{% endif %}>{{ v.label }}</option>
+            {% endfor %}
+          </select>
+          <small class="field__help">
+            声は下の「声 (音響モデル) を追加する」から増やせます。
+          </small>
+        </label>
+        <label class="field" style="max-width:200px">
+          <span class="field__label">話速</span>
+          <input class="field__input field__input--mono" type="number" name="speed"
+                 step="0.1" min="0.5" max="2.0"
+                 value="{{ submitted.speed if submitted else '1.0' }}">
+          <small class="field__help">0.5 (遅い) 〜 2.0 (速い)。標準は 1.0</small>
+        </label>
+      </div>
+
+      <details style="margin-top:8px">
+        <summary class="form-hint" style="cursor:pointer">声の詳細調整 (ピッチ・声質・音量)</summary>
+        <div class="form-row" style="margin-top:12px">
+          <label class="field" style="max-width:200px">
+            <span class="field__label">ピッチ (高さ)</span>
+            <input class="field__input field__input--mono" type="number" name="pitch"
+                   step="0.5" min="-6" max="6"
+                   value="{{ submitted.pitch if submitted and submitted.pitch else '0.0' }}">
+            <small class="field__help">
+              半音単位。+ で高い声、- で低い声。-6〜+6
+            </small>
+          </label>
+          <label class="field" style="max-width:200px">
+            <span class="field__label">声質</span>
+            <input class="field__input field__input--mono" type="number" name="tone"
+                   step="0.05" min="0" max="1" placeholder="(既定)"
+                   value="{{ submitted.tone if submitted and submitted.tone else '' }}">
+            <small class="field__help">
+              0〜1。空欄なら声ごとの既定値。上げると太く、下げると細い声に
+            </small>
+          </label>
+        </div>
+        <div class="form-row">
+          <label class="field" style="max-width:200px">
+            <span class="field__label">音量</span>
+            <input class="field__input field__input--mono" type="number" name="gain"
+                   step="1" min="-6" max="6"
+                   value="{{ submitted.gain if submitted and submitted.gain else '0.0' }}">
+            <small class="field__help">
+              dB 単位。-6〜+6。上げすぎると音割れするため制限しています
+            </small>
+          </label>
+          <label class="field" style="max-width:200px">
+            <span class="field__label">明瞭さ</span>
+            <input class="field__input field__input--mono" type="number" name="clarity"
+                   step="0.1" min="0" max="0.4"
+                   value="{{ submitted.clarity if submitted and submitted.clarity else '0.0' }}">
+            <small class="field__help">
+              0〜0.4。上げると輪郭がはっきりしますが、大きくすると音割れします
+            </small>
+          </label>
+        </div>
+        <p class="form-hint">
+          電話は音声帯域が狭いため、極端な設定は聞き取りにくくなります。
+          まず標準のまま作って再生し、必要に応じて少しずつ調整するのが
+          おすすめです。範囲外の値を入れた場合は自動的に安全な範囲に
+          収められます。
+        </p>
+      </details>
+
+      {{ field_text("note", "メモ", submitted=submitted) }}
+    </fieldset>
+
+    <div class="form-foot">
+      <a href="/audio/" class="btn">キャンセル</a>
+      <button type="submit" class="btn btn--primary" {% if not tts_ok %}disabled{% endif %}>{% if edit_id %}作り直して保存{% else %}音声を作成{% endif %}</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <header class="panel__head">
+    <h2>声 (音響モデル) を追加する</h2>
+  </header>
+  <p class="form-hint">
+    標準では男性の声が 1 つだけ利用できます。下のボタンで女性の声などを
+    追加できます (インターネットからダウンロードします)。追加後は上の
+    「声」ドロップダウンにすぐ現れます。
+  </p>
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="min-width:140px">声</th>
+        <th>内容</th>
+        <th style="min-width:110px">サイズ</th>
+        <th style="min-width:120px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for vp in voice_packs %}
+      <tr>
+        <td><strong>{{ vp.label }}</strong><br><small class="field__help">{{ vp.credit }}</small></td>
+        <td>{{ vp.description }}</td>
+        <td class="mono">{{ vp.size_hint }}</td>
+        <td>
+          {% if vp.installed %}
+            <span class="badge badge--ok">導入済み</span>
+          {% else %}
+          <form method="post" action="/audio/tts/install-voice" style="display:inline"
+                onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='ダウンロード中…';">
+            <input type="hidden" name="pack" value="{{ vp.key }}">
+            <button type="submit" class="btn btn--small btn--primary">この声を追加</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="form-hint">
+    ダウンロード中はページの読み込みが続きます (メイは 100MB あるため
+    数分かかることがあります)。完了すると自動的にこの画面へ戻ります。
+    うまくいかない場合は、サーバー上で
+    <code>sudo bash scripts/install_tts_voices.sh</code>
+    を実行しても同じことができます。
+  </p>
+
+  <h3 style="margin-top:24px">手持ちの音響モデルを追加する</h3>
+  <p class="form-hint">
+    上記以外の声を使いたい場合、<code>.htsvoice</code> 形式の音響モデル
+    ファイルをお持ちなら、ここからアップロードして追加できます。
+    自由に再配布できる音響モデルは多くないため、配布元の利用規約を
+    確認のうえご利用ください。
+  </p>
+  <form method="post" action="/audio/tts/upload-voice" enctype="multipart/form-data">
+    <div class="form-row" style="align-items:flex-end">
+      <label class="field">
+        <span class="field__label">音響モデルファイル (.htsvoice)</span>
+        <input class="field__input" type="file" name="voice_file" accept=".htsvoice" required>
+      </label>
+      <button type="submit" class="btn btn--primary" style="margin-bottom:4px">アップロード</button>
+    </div>
+  </form>
+
+  {% set custom_voices = voices | selectattr("custom") | list %}
+  {% if custom_voices %}
+  <p class="form-hint" style="margin-top:12px">
+    追加済みの音響モデル (削除できます):
+    {% for v in custom_voices %}
+    <form method="post" action="/audio/tts/delete-voice" style="display:inline"
+          onsubmit="return confirm('音響モデル「{{ v.label }}」を削除しますか?')">
+      <input type="hidden" name="key" value="{{ v.key }}">
+      <button type="submit" class="btn btn--small btn--danger">{{ v.label }}</button>
+    </form>
+    {% endfor %}
+  </p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <header class="panel__head">
+    <h2>留守番電話の日時読み上げ用の音声</h2>
+  </header>
+  <p class="form-hint">
+    内線から <code>*97</code> で留守番電話を聞くとき、メッセージの前に
+    「〇月〇日〇時〇分」と録音日時を読み上げる機能があります。ただし
+    Asterisk の日本語モードは <code>digits/ji</code> (時)、
+    <code>digits/fun</code> (分)、<code>digits/nichi</code> (日)、
+    <code>digits/mon-0</code>〜<code>mon-11</code> (月) といった専用の
+    音声ファイルを必要とし、<strong>一般的な日本語音声パックには
+    これらが含まれていません</strong>。
+  </p>
+  <p class="form-hint">
+    下のボタンで、これらの音声ファイルを自動生成できます。生成したら、
+    <a href="/system/">「システム」画面</a>の
+    「留守番電話の録音日時アナウンス」を有効にしてください
+    (音声が揃うまでは有効にできないようにしてあります)。
+  </p>
+  <p class="form-hint">
+    <strong>声が混ざって聞こえる場合</strong>: 元の日本語音声パックの
+    数字 (「いち」「に」…) は別の話者で録音されているため、そのままだと
+    「〇月〇日」と「〇時〇分」で声が変わってしまいます。下で声を選び、
+    「既存のファイルも作り直す」を有効にして生成すると、数字も含めて
+    すべて同じ声に統一されます。
+  </p>
+  <p class="form-hint">
+    現在の生成状況: <strong>{{ dt_done }} / {{ dt_total }}</strong> ファイル
+    {% if dt_done >= dt_total %}
+    <span class="badge badge--ok">生成済み</span>
+    {% elif dt_done > 0 %}
+    <span class="badge">一部のみ</span>
+    {% else %}
+    <span class="badge badge--off">未生成</span>
+    {% endif %}
+  </p>
+  <form method="post" action="/audio/tts/datetime-sounds" class="form-grid">
+    <div class="form-row">
+      <label class="field" style="max-width:280px">
+        <span class="field__label">読み上げる声</span>
+        <select class="field__select" name="dt_voice">
+          {% for v in voices %}
+          <option value="{{ v.key }}">{{ v.label }}</option>
+          {% endfor %}
+        </select>
+        <small class="field__help">
+          「〇月〇日〇時〇分」を読み上げる声です。数字部分も同じ声で
+          生成するため、全体が同じ話者に揃います。
+        </small>
+      </label>
+      <label class="field field--toggle" style="max-width:280px">
+        <span class="field__label">既存のファイルも作り直す</span>
+        <span class="toggle">
+          <input type="checkbox" name="overwrite" value="on">
+          <span class="toggle__track"><span class="toggle__thumb"></span></span>
+          <span class="toggle__hint">上書きする</span>
+        </span>
+        <small class="field__help">
+          <strong>声を変更する場合は必ず有効にしてください。</strong>
+          無効のままだと既存ファイルがそのまま残り、声が混ざります。
+        </small>
+      </label>
+    </div>
+    <div class="form-foot">
+      <button type="submit" class="btn btn--primary" {% if not tts_ok %}disabled{% endif %}
+              onclick="this.disabled=true; this.textContent='生成中… (1〜2分かかります)'; this.form.submit();">
+        日時読み上げ用の音声を生成
+      </button>
+    </div>
+  </form>
+</section>
+{% endblock %}

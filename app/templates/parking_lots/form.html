@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_number, field_select, field_toggle, errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+<form method="post" action="{{ form_action }}" class="form-grid" autocomplete="off">
+  <fieldset class="form-section">
+    <legend>基本</legend>
+    <div class="form-row">
+      {{ field_text("name", "パーク名 (英数_)", item=item, submitted=submitted, required=True,
+                    pattern="[A-Za-z0-9_]+", monospace=True) }}
+      {{ field_text("park_ext", "パーク代表番号", item=item, submitted=submitted, monospace=True,
+                    pattern="\\d{3,5}", required=True,
+                    help="通話中にこの番号へ転送するとパーク (通常 700)。") }}
+    </div>
+    <div class="form-row">
+      {{ field_number("park_pos_start", "スロット開始番号", item=item, submitted=submitted,
+                      default=701, min=10, max=99999, required=True,
+                      help="取り出し時にダイヤルする番号の先頭 (例: 701)。") }}
+      {{ field_number("park_pos_end", "スロット終端", item=item, submitted=submitted,
+                      default=720, min=10, max=99999, required=True,
+                      help="100 スロット以内。") }}
+    </div>
+    <div class="form-row">
+      {{ field_number("park_time_seconds", "取り出し制限時間 (秒)", item=item, submitted=submitted,
+                      default=120, min=10, max=3600,
+                      help="この時間を超えると元の発信者に戻す。") }}
+      {{ field_select("moh_class", "保留中の音源クラス", moh_classes,
+                      item=item, submitted=submitted, allow_empty=False,
+                      help="未選択で 'default' を使用。") }}
+    </div>
+    <div class="form-row">
+      {{ field_text("comeback_context", "戻し先コンテキスト", item=item, submitted=submitted,
+                    monospace=True, help="タイムアウト時の戻し先 (通常 from-internal)。") }}
+      {{ field_select("findslot", "空きスロット検索方式",
+                      [{"value":"first","label":"first (最初の空き)"},{"value":"next","label":"next (次へ)"}],
+                      item=item, submitted=submitted) }}
+    </div>
+    <div class="form-row">
+      {{ field_toggle("is_default", "default として扱う",
+                      item=item, submitted=submitted, default=False) }}
+      {{ field_toggle("enabled", "有効化",
+                      item=item, submitted=submitted, default=True) }}
+    </div>
+    {{ field_text("note", "メモ", item=item, submitted=submitted) }}
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/parking-lots/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/ivrs/new" class="btn btn--primary">+ IVR を追加</a>
+{% endblock %}
+
+{% block content %}
+
+<p class="form-hint">
+  IVR は <code>extensions.conf</code> のコンテキスト <code>[ivr-&lt;name&gt;]</code> として生成されます。
+  着信ルートの転送先で「IVR」を選び、ここで作成した名前を指定すると流れます。
+</p>
+
+{% if not items %}
+<div class="empty">
+  <p>IVR が登録されていません。</p>
+  <p class="empty__hint">先に <a href="/audio/new">音源 (カテゴリ ivr)</a> をアップロードしておくと選択肢に出ます。</p>
+  <a href="/ivrs/new" class="btn btn--primary">最初の IVR を追加</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>名前</th>
+      <th>表示名</th>
+      <th>分岐</th>
+      <th>タイムアウト</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td class="mono"><strong>{{ it.name }}</strong></td>
+      <td>{{ it.display_name }}</td>
+      <td>{{ it.entries|length }} キー</td>
+      <td class="mono">{{ it.timeout_seconds }}秒 / {{ it.max_retries }}回</td>
+      <td>
+        {% if it.enabled %}<span class="badge badge--ok">有効</span>
+        {% else %}<span class="badge badge--off">無効</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/ivrs/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/ivrs/{{ it.id }}/delete"
+              onsubmit="return confirm('IVR {{ it.name }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

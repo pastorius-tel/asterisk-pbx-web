@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/fax/send" class="btn btn--primary">+ FAX 送信</a>
+<a href="/fax/config" class="btn">FAX 設定</a>
+{% endblock %}
+
+{% block content %}
+
+{% if not cfg.enabled %}
+<div class="form-hint" style="background:#fff3cd;border:1px solid #ffe69c;padding:10px;border-radius:6px;">
+  FAX 機能は<strong>無効</strong>です。<a href="/fax/config">FAX 設定</a>で有効化し、「変更を Asterisk へ反映」してください。
+</div>
+{% endif %}
+
+<div class="form-hint">
+  受信 FAX は <code>{{ "受信FAX_YYYYMMDD_HHMM_着信番号.pdf" }}</code>、
+  送信 FAX は <code>{{ "送信FAX_YYYYMMDD_HHMM_宛先番号.pdf" }}</code> で保存されます。
+  受信時は設定したメールアドレスへ着信番号・時刻を本文に PDF 添付で通知します。
+</div>
+
+{% if not tools.tiff2pdf or not tools.gs %}
+<div class="form-hint" style="background:#f8d7da;border:1px solid #f1aeb5;padding:10px;border-radius:6px;">
+  <strong>必要なコマンドが不足しています:</strong>
+  {% if not tools.tiff2pdf %}<code>tiff2pdf</code> (libtiff-tools){% endif %}
+  {% if not tools.gs %} <code>gs</code> (ghostscript){% endif %}<br>
+  <code>sudo apt install -y libtiff-tools ghostscript</code> でインストールしてください。
+</div>
+{% endif %}
+
+<h3 style="margin-top:20px;">送受信履歴</h3>
+
+{% if not logs %}
+<div class="empty"><p>FAX の送受信履歴はまだありません。</p></div>
+{% else %}
+<form method="post" action="/fax/delete-bulk" id="bulk-delete-form"
+      onsubmit="return confirm('選択した ' + document.querySelectorAll('.fax-row-check:checked').length + ' 件を削除しますか？PDFも削除されます');">
+</form>
+<div class="form-hint" style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+  <button type="submit" form="bulk-delete-form" class="btn btn--small btn--danger" id="bulk-delete-btn" disabled>選択した項目を削除</button>
+  <span id="bulk-delete-count" style="color:var(--c-text-muted,#666);font-size:13px;"></span>
+</div>
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th><input type="checkbox" id="fax-select-all"></th>
+      <th>日時</th>
+      <th>区分</th>
+      <th>相手番号</th>
+      <th>ページ</th>
+      <th>状態</th>
+      <th>メール</th>
+      <th>外部保存</th>
+      <th>PDF</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for lg in logs %}
+    <tr>
+      <td><input type="checkbox" name="fax_ids" value="{{ lg.id }}" class="fax-row-check" form="bulk-delete-form"></td>
+      <td class="mono">{{ lg.created_at.strftime("%Y-%m-%d %H:%M") if lg.created_at else "-" }}</td>
+      <td>
+        {% if lg.direction == "recv" %}
+          <span class="badge badge--hikari">受信</span>
+        {% else %}
+          <span class="badge">送信</span>
+        {% endif %}
+      </td>
+      <td class="mono">{{ lg.peer_number or "-" }}</td>
+      <td class="mono">{{ lg.pages if lg.pages is not none else "-" }}</td>
+      <td>
+        {% if lg.status == "success" %}
+          <span class="badge badge--ok">成功</span>
+        {% elif lg.status == "failed" %}
+          <span class="badge badge--err" title="{{ lg.error_detail or '' }}">失敗</span>
+        {% else %}
+          <span class="badge">{{ lg.status }}</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if lg.direction == "recv" %}
+          {% if lg.mail_sent %}<span class="badge badge--ok">送信済</span>
+          {% else %}<span class="badge">未</span>{% endif %}
+        {% else %}-{% endif %}
+      </td>
+      <td>
+        {% if lg.direction == "recv" %}
+          {% if lg.smb_saved %}
+            <span class="badge badge--ok" title="{{ lg.smb_path_saved or '' }}">保存済</span>
+          {% else %}<span class="badge">未</span>{% endif %}
+        {% else %}-{% endif %}
+      </td>
+      <td>
+        {% if lg.pdf_path %}
+          <a href="/fax/{{ lg.id }}/view" target="_blank" class="btn btn--small">閲覧</a>
+          <a href="/fax/{{ lg.id }}/download" class="btn btn--small">DL</a>
+        {% else %}-{% endif %}
+      </td>
+      <td>
+        <form method="post" action="/fax/{{ lg.id }}/delete"
+              onsubmit="return confirm('この履歴を削除しますか？PDFも削除されます');"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% if lg.status == "failed" and lg.error_detail %}
+    <tr><td colspan="10" class="mono" style="font-size:11px;color:#b42318;background:#fff5f5;">
+      {{ lg.error_detail }}
+    </td></tr>
+    {% endif %}
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<script>
+(function () {
+  var selectAll = document.getElementById('fax-select-all');
+  var rowChecks = Array.prototype.slice.call(document.querySelectorAll('.fax-row-check'));
+  var bulkBtn = document.getElementById('bulk-delete-btn');
+  var countLabel = document.getElementById('bulk-delete-count');
+
+  function refresh() {
+    var checked = rowChecks.filter(function (c) { return c.checked; });
+    bulkBtn.disabled = checked.length === 0;
+    countLabel.textContent = checked.length > 0 ? checked.length + ' 件選択中' : '';
+    selectAll.checked = checked.length > 0 && checked.length === rowChecks.length;
+    selectAll.indeterminate = checked.length > 0 && checked.length < rowChecks.length;
+  }
+
+  selectAll.addEventListener('change', function () {
+    rowChecks.forEach(function (c) { c.checked = selectAll.checked; });
+    refresh();
+  });
+  rowChecks.forEach(function (c) { c.addEventListener('change', refresh); });
+  refresh();
+})();
+</script>
+{% endif %}
+
+{% endblock %}

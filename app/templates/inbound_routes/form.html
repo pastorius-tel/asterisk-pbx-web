@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+{% set cur_dt = (submitted.destination_type if submitted else (item.destination_type if item else "extension")) %}
+{% set cur_dv = (submitted.destination_value if submitted else (item.destination_value if item else "")) %}
+{% set cur_na = (submitted.no_answer_type if submitted else (item.no_answer_type if item else "")) %}
+{% set cur_nav = (submitted.no_answer_value if submitted else (item.no_answer_value if item else "")) %}
+
+<form method="post" action="{{ form_action }}" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>基本</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">ルート名 <span style="color:#c00">*</span></span>
+        <input class="field__input" name="name" required
+               value="{{ submitted.name if submitted else (item.name if item else '') }}"
+               placeholder="代表電話">
+      </label>
+      <label class="field">
+        <span class="field__label">優先順位</span>
+        <input class="field__input field__input--mono" name="priority" type="number"
+               value="{{ submitted.priority if submitted else (item.priority if item else 100) }}"
+               min="1" max="9999">
+        <small class="field__help">小さいほど先に判定。</small>
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>着信条件</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">着信番号 (DID)</span>
+        <input class="field__input field__input--mono" name="did_number"
+               value="{{ submitted.did_number if submitted else (item.did_number or '' if item else '') }}"
+               placeholder="0312345678">
+        <small class="field__help">
+          この番号宛の着信に適用。<strong>空欄ならすべての着信</strong>に適用
+          (キャッチオール)。ひかり電話の契約番号・追加番号を入力。
+        </small>
+      </label>
+      <label class="field">
+        <span class="field__label">発信者番号フィルタ (任意)</span>
+        <input class="field__input field__input--mono" name="caller_id_pattern"
+               value="{{ submitted.caller_id_pattern if submitted else (item.caller_id_pattern or '' if item else '') }}"
+               placeholder="例: _03Z.">
+        <small class="field__help">特定の発信元だけに適用したい場合のみ。</small>
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>転送先</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">転送先の種類 <span style="color:#c00">*</span></span>
+        <select class="field__select" name="destination_type" id="destType" required
+                onchange="updateDestUI()">
+          {% for opt in route_actions %}
+            <option value="{{ opt.value }}"
+              {% if opt.value == cur_dt %}selected{% endif %}>{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      {# 内線 #}
+      <label class="field dest-field" data-for="extension">
+        <span class="field__label">転送先の内線</span>
+        <select class="field__select" name="dv_extension">
+          <option value="">— 選択 —</option>
+          {% for c in ext_choices %}
+            <option value="{{ c.value }}"
+              {% if cur_dt == "extension" and c.value == cur_dv %}selected{% endif %}>{{ c.label }}</option>
+          {% endfor %}
+        </select>
+        <small class="field__help">この内線を呼び出します。</small>
+      </label>
+
+      {# ボイスメール #}
+      <label class="field dest-field" data-for="voicemail">
+        <span class="field__label">ボイスメール (内線)</span>
+        <select class="field__select" name="dv_voicemail">
+          <option value="">— 選択 —</option>
+          {% for c in vm_choices %}
+            <option value="{{ c.value }}"
+              {% if cur_dt == "voicemail" and c.value == cur_dv %}selected{% endif %}>{{ c.label }}</option>
+          {% endfor %}
+        </select>
+        <small class="field__help">
+          直接ボイスメールへ。一覧に出ない場合は内線画面でボイスメールを有効化してください。
+        </small>
+      </label>
+
+      {# IVR #}
+      <label class="field dest-field" data-for="ivr">
+        <span class="field__label">IVR</span>
+        <select class="field__select" name="dv_ivr">
+          <option value="">— 選択 —</option>
+          {% for c in ivr_choices %}
+            <option value="{{ c.value }}"
+              {% if cur_dt == "ivr" and c.value == cur_dv %}selected{% endif %}>{{ c.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      {# キュー #}
+      <label class="field dest-field" data-for="queue">
+        <span class="field__label">キュー</span>
+        <select class="field__select" name="dv_queue">
+          <option value="">— 選択 —</option>
+          {% for c in queue_choices %}
+            <option value="{{ c.value }}"
+              {% if cur_dt == "queue" and c.value == cur_dv %}selected{% endif %}>{{ c.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      {# リンググループ #}
+      <label class="field dest-field" data-for="ring_group">
+        <span class="field__label">リンググループ</span>
+        <select class="field__select" name="dv_ring_group">
+          <option value="">— 選択 —</option>
+          {% for c in rg_choices %}
+            <option value="{{ c.value }}"
+              {% if cur_dt == "ring_group" and c.value == cur_dv %}selected{% endif %}>{{ c.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      {# 時間条件 #}
+      <label class="field dest-field" data-for="time_condition">
+        <span class="field__label">時間条件</span>
+        <select class="field__select" name="dv_time_condition">
+          <option value="">— 選択 —</option>
+          {% for c in tc_choices %}
+            <option value="{{ c.value }}"
+              {% if cur_dt == "time_condition" and c.value == cur_dv %}selected{% endif %}>{{ c.label }}</option>
+          {% endfor %}
+        </select>
+        {% if not tc_choices %}
+        <small class="field__help">
+          時間条件がまだありません。
+          <a href="/schedules/">スケジュール設定</a>で作成してください。
+        </small>
+        {% endif %}
+      </label>
+    </div>
+  </fieldset>
+
+  {# 内線転送時のみ: 応答なしフォールバック #}
+  <fieldset class="form-section" id="naSection">
+    <legend>応答なし時の処理 (内線転送のとき)</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">呼び出し秒数</span>
+        <input class="field__input field__input--mono" name="ring_seconds" type="number"
+               value="{{ submitted.ring_seconds if submitted else (item.ring_seconds if item else 30) }}"
+               min="5" max="300">
+        <small class="field__help">この秒数応答がなければ下記へ。</small>
+      </label>
+      <label class="field">
+        <span class="field__label">応答なし時の転送先</span>
+        <select class="field__select" name="no_answer_type" id="naType"
+                onchange="updateNaUI()">
+          <option value="" {% if not cur_na %}selected{% endif %}>切断する</option>
+          <option value="voicemail" {% if cur_na == "voicemail" %}selected{% endif %}>ボイスメールへ</option>
+          <option value="extension" {% if cur_na == "extension" %}selected{% endif %}>別の内線へ</option>
+          <option value="hangup" {% if cur_na == "hangup" %}selected{% endif %}>切断する (明示)</option>
+        </select>
+      </label>
+      <label class="field" id="naValueField">
+        <span class="field__label">転送先 (内線番号)</span>
+        <input class="field__input field__input--mono" name="no_answer_value"
+               value="{{ cur_nav or '' }}" placeholder="1001">
+        <small class="field__help">
+          ボイスメール選択時はその内線のメールボックスに録音されます。
+        </small>
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>オプション</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">発信者表示プレフィクス (任意)</span>
+        <input class="field__input" name="cid_prefix"
+               value="{{ submitted.cid_prefix if submitted else (item.cid_prefix or '' if item else '') }}"
+               placeholder="[外線] ">
+      </label>
+      <label class="field">
+        <span class="field__label">メモ</span>
+        <input class="field__input" name="note"
+               value="{{ submitted.note if submitted else (item.note or '' if item else '') }}">
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field field--toggle">
+        <span class="field__label">通話を録音する</span>
+        <span class="toggle">
+          <input type="checkbox" name="record_call"
+            {% if (submitted and submitted.get('record_call')) or (item and item.record_call) %}checked{% endif %}>
+          <span class="toggle__track"><span class="toggle__thumb"></span></span>
+          <span class="toggle__hint">{{ "有効" if ((submitted and submitted.get('record_call')) or (item and item.record_call)) else "無効" }}</span>
+        </span>
+      </label>
+      <label class="field field--toggle">
+        <span class="field__label">有効</span>
+        <span class="toggle">
+          <input type="checkbox" name="enabled"
+            {% if submitted %}{% if submitted.get('enabled') %}checked{% endif %}{% elif item %}{% if item.enabled %}checked{% endif %}{% else %}checked{% endif %}>
+          <span class="toggle__track"><span class="toggle__thumb"></span></span>
+          <span class="toggle__hint">
+            {% if submitted %}{{ "有効" if submitted.get('enabled') else "無効" }}{% elif item %}{{ "有効" if item.enabled else "無効" }}{% else %}有効{% endif %}
+          </span>
+        </span>
+      </label>
+    </div>
+  </fieldset>
+
+  {# 実送信用の hidden。JS が選択中の dv_* から値を入れる #}
+  <input type="hidden" name="destination_value" id="destValue" value="{{ cur_dv }}">
+
+  <div class="form-foot">
+    <a href="/inbound-routes/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary" onclick="return syncDestValue()">保存</button>
+  </div>
+</form>
+
+<script>
+function updateDestUI() {
+  var t = document.getElementById('destType').value;
+  document.querySelectorAll('.dest-field').forEach(function(el){
+    el.style.display = (el.getAttribute('data-for') === t) ? '' : 'none';
+  });
+  // 応答なしセクションは内線転送のときだけ
+  document.getElementById('naSection').style.display = (t === 'extension') ? '' : 'none';
+}
+function updateNaUI() {
+  var na = document.getElementById('naType').value;
+  // 切断系は転送先入力不要
+  var needVal = (na === 'voicemail' || na === 'extension');
+  document.getElementById('naValueField').style.display = needVal ? '' : 'none';
+}
+function syncDestValue() {
+  var t = document.getElementById('destType').value;
+  var v = '';
+  if (t === 'hangup' || t === 'fax') {
+    v = t;  // 値不要だが空だとバリデーション NG のためダミー
+  } else {
+    var sel = document.querySelector('[name="dv_' + t + '"]');
+    v = sel ? sel.value : '';
+  }
+  if (!v && t !== 'hangup' && t !== 'fax') {
+    alert('転送先を選択してください。');
+    return false;
+  }
+  document.getElementById('destValue').value = v || t;
+  return true;
+}
+// 初期表示
+updateDestUI();
+updateNaUI();
+</script>
+{% endblock %}

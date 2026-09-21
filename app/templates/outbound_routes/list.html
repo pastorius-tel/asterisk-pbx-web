@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/outbound-routes/new" class="btn btn--primary">+ 発信ルートを追加</a>
+{% endblock %}
+
+{% block content %}
+{% if not items %}
+<div class="empty">
+  <p>発信ルートが登録されていません。</p>
+  <p class="empty__hint">先にトランクを登録してから追加してください。</p>
+  <a href="/outbound-routes/new" class="btn btn--primary">追加する</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>優先</th>
+      <th>名前</th>
+      <th>パターン</th>
+      <th>桁削/付加</th>
+      <th>トランク</th>
+      <th>状態</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td class="mono">{{ it.priority }}</td>
+      <td><strong>{{ it.name }}</strong></td>
+      <td class="mono">{{ it.pattern }}</td>
+      <td class="mono compact">
+        {%- if it.prefix_strip -%}-{{ it.prefix_strip }}{%- endif -%}
+        {%- if it.prefix_prepend -%}+{{ it.prefix_prepend }}{%- endif -%}
+        {%- if not it.prefix_strip and not it.prefix_prepend -%}—{%- endif -%}
+      </td>
+      <td>{{ trunk_map.get(it.trunk_id, "?") }}</td>
+      <td>
+        {% if it.enabled %}<span class="badge badge--ok">有効</span>
+        {% else %}<span class="badge badge--off">無効</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/outbound-routes/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/outbound-routes/{{ it.id }}/delete"
+              onsubmit="return confirm('発信ルート {{ it.name }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

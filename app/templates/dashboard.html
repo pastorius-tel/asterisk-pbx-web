@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<!-- 発着信履歴 (一番よく見るので先頭に置く) -->
+<section class="panel">
+  <header class="panel__head" style="display:flex;align-items:center;justify-content:space-between;">
+    <h2>着信履歴</h2>
+    <a href="/call-logs/?direction=in" class="btn btn--small">すべて見る →</a>
+  </header>
+  {% if not recent_in %}
+  <p class="form-hint">着信履歴はまだありません。</p>
+  {% else %}
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead>
+      <tr><th style="min-width:140px">日時</th><th>発信元</th><th>着信先</th><th>結果</th></tr>
+    </thead>
+    <tbody>
+      {% for c in recent_in %}
+      <tr>
+        <td class="mono">{{ c.started_at.strftime("%m-%d %H:%M") }}</td>
+        <td class="mono">
+          <a href="/call-logs/?direction=in&q={{ c.peer_number|urlencode }}"
+             title="この番号の履歴を表示 (電話帳・迷惑電話への登録もここから)">{{ c.peer_number }}</a>
+        </td>
+        <td>{{ c.dest_label or "-" }}</td>
+        <td>
+          {% set d = disposition(c.disposition) %}
+          {% if d.css %}<span class="badge {{ d.css }}">{{ d.label }}</span>
+          {% else %}-{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <header class="panel__head" style="display:flex;align-items:center;justify-content:space-between;">
+    <h2>発信履歴</h2>
+    <a href="/call-logs/?direction=out" class="btn btn--small">すべて見る →</a>
+  </header>
+  {% if not recent_out %}
+  <p class="form-hint">発信履歴はまだありません。</p>
+  {% else %}
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead>
+      <tr><th style="min-width:140px">日時</th><th>発信先</th><th>経由</th><th>結果</th></tr>
+    </thead>
+    <tbody>
+      {% for c in recent_out %}
+      <tr>
+        <td class="mono">{{ c.started_at.strftime("%m-%d %H:%M") }}</td>
+        <td class="mono">
+          <a href="/call-logs/?direction=out&q={{ c.peer_number|urlencode }}"
+             title="この番号の履歴を表示 (電話帳・迷惑電話への登録もここから)">{{ c.peer_number }}</a>
+        </td>
+        <td>{{ c.dest_label or "-" }}</td>
+        <td>
+          {% set d = disposition(c.disposition) %}
+          {% if d.css %}<span class="badge {{ d.css }}">{{ d.label }}</span>
+          {% else %}-{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <header class="panel__head" style="display:flex;align-items:center;justify-content:space-between;">
+    <h2>FAX 送受信履歴</h2>
+    <a href="/fax/" class="btn btn--small">すべて見る →</a>
+  </header>
+  {% if not recent_faxes %}
+  <div class="empty"><p>FAX の送受信履歴はまだありません。</p></div>
+  {% else %}
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>日時</th>
+        <th>区分</th>
+        <th>相手番号</th>
+        <th>ページ</th>
+        <th>状態</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lg in recent_faxes %}
+      <tr>
+        <td class="mono">{{ lg.created_at.strftime("%Y-%m-%d %H:%M") if lg.created_at else "-" }}</td>
+        <td>
+          {% if lg.direction == "recv" %}
+            <span class="badge badge--hikari">受信</span>
+          {% else %}
+            <span class="badge">送信</span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ lg.peer_number or "-" }}</td>
+        <td class="mono">{{ lg.pages if lg.pages is not none else "-" }}</td>
+        <td>
+          {% if lg.status == "success" %}
+            <span class="badge badge--ok">成功</span>
+          {% elif lg.status == "failed" %}
+            <span class="badge badge--err">失敗</span>
+          {% else %}
+            <span class="badge">{{ lg.status }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <header class="panel__head" style="display:flex;align-items:center;justify-content:space-between;">
+    <h2>留守番電話 メッセージ一覧</h2>
+    <a href="/voicemail/" class="btn btn--small">すべて見る →</a>
+  </header>
+  {% if not recent_voicemails %}
+  <div class="empty"><p>ボイスメールのメッセージはまだありません。</p></div>
+  {% else %}
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>日時</th>
+        <th>内線</th>
+        <th>発信者</th>
+        <th>長さ</th>
+        <th>状態</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in recent_voicemails %}
+      <tr>
+        <td class="mono">{{ m.when.strftime("%Y-%m-%d %H:%M") if m.when else "-" }}</td>
+        <td class="mono">{{ m.extension }} <span style="color:var(--c-text-muted,#666);">({{ vm_ext_names.get(m.extension, "") }})</span></td>
+        <td class="mono">{{ m.caller_number or "非通知/不明" }}</td>
+        <td class="mono">{{ (m.duration_sec ~ "秒") if m.duration_sec is not none else "-" }}</td>
+        <td>
+          {% if m.folder == "INBOX" %}
+            <span class="badge badge--ok">新着</span>
+          {% else %}
+            <span class="badge">聴取済</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

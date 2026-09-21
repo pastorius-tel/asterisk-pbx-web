@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{% if message %}
+<div class="notice" role="alert"><strong>{{ message }}</strong></div>
+{% endif %}
+
+<div class="tabs">
+  <a href="/call-logs/?direction=in&days={{ days }}"
+     class="tab {% if direction == 'in' %}is-active{% endif %}">着信履歴</a>
+  <a href="/call-logs/?direction=out&days={{ days }}"
+     class="tab {% if direction == 'out' %}is-active{% endif %}">発信履歴</a>
+</div>
+
+<form method="get" action="/call-logs/" class="form-row" style="align-items:flex-end;margin-top:12px">
+  <input type="hidden" name="direction" value="{{ direction }}">
+  <label class="field" style="max-width:160px">
+    <span class="field__label">表示期間</span>
+    <select class="field__select" name="days" onchange="this.form.submit()">
+      {% for d in [1, 7, 30, 90, 365] %}
+      <option value="{{ d }}" {% if days == d %}selected{% endif %}>
+        {% if d == 1 %}今日{% else %}過去 {{ d }} 日{% endif %}
+      </option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field" style="max-width:240px">
+    <span class="field__label">番号で絞り込み</span>
+    <input class="field__input field__input--mono" type="text" name="q"
+           value="{{ q }}" placeholder="0312345678">
+  </label>
+  <div class="field" style="max-width:120px">
+    <span class="field__label">&nbsp;</span>
+    <button type="submit" class="btn">絞り込む</button>
+  </div>
+</form>
+
+{% if not items %}
+<div class="empty">
+  <p>{{ "着信" if direction == "in" else "発信" }}履歴がありません。</p>
+  <p class="empty__hint">
+    履歴は通話が終わった時点で記録されます。設定を変更した直後は、
+    左下の「変更を Asterisk へ反映」を実行してから通話してください。
+  </p>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th style="min-width:150px">日時</th>
+      <th style="min-width:130px">{{ "発信元" if direction == "in" else "発信先" }}</th>
+      <th style="min-width:150px">{{ "着信先" if direction == "in" else "経由" }}</th>
+      <th style="min-width:90px">結果</th>
+      <th style="min-width:80px">通話時間</th>
+      <th style="min-width:60px"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    {% set log = it.log %}
+    <tr>
+      <td class="mono">{{ log.started_at.strftime("%Y-%m-%d %H:%M") }}</td>
+      <td>
+        <span class="mono">{{ log.peer_number }}</span>
+        {% if log.peer_name %}<br><small>{{ log.peer_name }}</small>{% endif %}
+        {% if log.is_blocked %}<br><span class="badge badge--err">ブロック</span>{% endif %}
+      </td>
+      <td>
+        {{ it.dest }}
+        {% if log.did_number %}<br><small class="mono">着信番号 {{ log.did_number }}</small>{% endif %}
+      </td>
+      <td>
+        {% set d = disposition(log.disposition) %}
+        {% if d.css %}<span class="badge {{ d.css }}">{{ d.label }}</span>
+        {% else %}-{% endif %}
+      </td>
+      <td class="mono">
+        {% if log.billable_seconds %}{{ log.billable_seconds }} 秒
+        {% elif log.duration_seconds %}({{ log.duration_seconds }} 秒){% else %}-{% endif %}
+      </td>
+      <td class="actions">
+        {% if log.peer_number and log.peer_number != "anonymous" %}
+        <details class="submenu">
+          <summary class="btn btn--small" title="この番号を登録">⋯</summary>
+          <div class="submenu__panel">
+            <p class="submenu__num mono">{{ log.peer_number }}</p>
+
+            {% if it.in_book %}
+            <p class="submenu__done">電話帳に登録済み</p>
+            {% else %}
+            <form method="post" action="/call-logs/{{ log.id }}/phonebook">
+              <label class="field">
+                <span class="field__label">電話帳に登録</span>
+                <input class="field__input" type="text" name="name"
+                       placeholder="相手の名前 (空欄なら番号)">
+              </label>
+              <label class="field">
+                <span class="field__label">短縮番号 (任意)</span>
+                <input class="field__input field__input--mono" type="text" name="speed_dial"
+                       pattern="\d{2,3}" maxlength="3" placeholder="01">
+                <small class="field__help">
+                  入れると *7 + この番号で発信できます (例: 01 → *701)
+                </small>
+              </label>
+              <button type="submit" class="btn btn--small btn--primary">電話帳に追加</button>
+            </form>
+            {% endif %}
+
+            <hr class="submenu__sep">
+
+            {% if it.in_block %}
+            <p class="submenu__done">迷惑電話に登録済み</p>
+            {% else %}
+            <form method="post" action="/call-logs/{{ log.id }}/block"
+                  onsubmit="return confirm('{{ log.peer_number }} を迷惑電話ブロックリストに登録しますか?')">
+              <label class="field">
+                <span class="field__label">迷惑電話として登録</span>
+                <select class="field__select" name="action">
+                  <option value="hangup">着信を即切断する</option>
+                  <option value="voicemail">留守番電話へ回す</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field__label">留守番電話の転送先</span>
+                <select class="field__select" name="voicemail_target">
+                  <option value="">— 選択 —</option>
+                  {% for opt in ext_choices %}
+                  <option value="{{ opt.value }}">{{ opt.label }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <button type="submit" class="btn btn--small btn--danger">迷惑電話に追加</button>
+            </form>
+            {% endif %}
+          </div>
+        </details>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<p class="form-hint" style="margin-top:16px">
+  最新 500 件まで表示します。
+</p>
+<form method="post" action="/call-logs/clear" style="display:inline"
+      onsubmit="return confirm('90 日より古い{{ '着信' if direction == 'in' else '発信' }}履歴を削除しますか?')">
+  <input type="hidden" name="direction" value="{{ direction }}">
+  <input type="hidden" name="days" value="90">
+  <button type="submit" class="btn btn--small">90 日より古い履歴を削除</button>
+</form>
+{% endif %}
+
+<script>
+(function () {
+  // サブメニュー (三点リーダ) の位置を、開いたボタンに合わせて画面基準で
+  // 決める。テーブルの overflow:hidden に切り取られるのを避けるため
+  // position:fixed にしてあり、そのぶん座標をここで計算する必要がある。
+  function place(details) {
+    const panel = details.querySelector(".submenu__panel");
+    const btn = details.querySelector("summary");
+    if (!panel || !btn) return;
+    const r = btn.getBoundingClientRect();
+    const w = panel.offsetWidth || 260;
+    const h = panel.offsetHeight || 260;
+    // 右端からはみ出さないよう、ボタンの右端に合わせる
+    let left = r.right - w;
+    if (left < 8) left = 8;
+    // 下に入りきらなければボタンの上側に出す
+    let top = r.bottom + 4;
+    if (top + h > window.innerHeight - 8) {
+      top = r.top - h - 4;
+      if (top < 8) top = 8;
+    }
+    panel.style.left = left + "px";
+    panel.style.top = top + "px";
+  }
+
+  document.querySelectorAll("details.submenu").forEach(d => {
+    d.addEventListener("toggle", () => {
+      if (!d.open) return;
+      // 同時に開くのは 1 つだけにする
+      document.querySelectorAll("details.submenu[open]").forEach(o => {
+        if (o !== d) o.open = false;
+      });
+      place(d);
+    });
+  });
+
+  // 外側をクリックしたら閉じる
+  document.addEventListener("click", e => {
+    document.querySelectorAll("details.submenu[open]").forEach(d => {
+      if (!d.contains(e.target)) d.open = false;
+    });
+  });
+  // スクロール・リサイズ時は位置を追従させる
+  ["scroll", "resize"].forEach(ev => {
+    window.addEventListener(ev, () => {
+      document.querySelectorAll("details.submenu[open]").forEach(place);
+    }, true);
+  });
+})();
+</script>
+{% endblock %}
