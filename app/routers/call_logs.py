@@ -22,6 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.hooks import verify_hook
 from app.models import BlockedNumber, CallLog, Extension, PhoneBookEntry
+from app.routers._helpers import form_int
+from app.routers.phone_book import _SPEED_RE
+from app.validators import normalize_phone_number
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +197,7 @@ async def add_to_blocklist(
     """履歴の相手番号を迷惑電話ブロックリストに登録する。"""
     log = await db.get(CallLog, log_id)
     if log is None:
-        return _back(log_id and "in" or "in", "履歴が見つかりません。")
+        return _back("in", "履歴が見つかりません。")
     number = log.peer_number
     if not number or number == "anonymous":
         return _back(log.direction, "非通知の番号は登録できません。")
@@ -240,10 +243,14 @@ async def add_to_phonebook(
         return _back(log.direction, f"{number} は既に電話帳にあります。")
 
     # 短縮番号 (任意)。2〜3 桁の数字で、既に使われていなければ設定する。
-    speed = speed_dial.strip()
+    # 全角で入力されても受け付けられるよう半角に直してから検査する。
+    # (str.isdigit() は全角 '０１' や '²' も True にするため使わない。
+    #  全角のまま保存すると *7 に続く番号として Asterisk が解決できず、
+    #  「登録したのに短縮ダイヤルが繋がらない」原因になる)
+    speed = normalize_phone_number(speed_dial)
     msg_extra = ""
-    if speed:
-        if not speed.isdigit() or not (2 <= len(speed) <= 3):
+    if speed_dial.strip():
+        if not _SPEED_RE.match(speed):
             return _back(log.direction, "短縮番号は 2〜3 桁の数字で入力してください。")
         dup = (
             await db.scalars(
@@ -270,26 +277,88 @@ async def add_to_phonebook(
 @router.post("/clear")
 async def clear_logs(
     direction: str = Form("in"),
-    days: int = Form(0),
+    days: str = Form(""),
+    view_days: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ) -> RedirectResponse:
-    """履歴を削除する。days>0 ならその日数より古いものだけ消す。"""
-    stmt = delete(CallLog)
+    """指定日数より古い履歴を削除する。
+
+    以前は days を省略 (または 0) すると**その方向の履歴が全件消える**
+    作りだった。画面からは必ず 90 が送られるが、フォームを経由しない
+    POST でも一括全消去にならないよう、日数が正しく指定された場合だけ
+    実行する。
+    """
+    n = form_int(days)
+    if not n or n < 1:
+        return _back(direction, "削除する期間が正しく指定されていません。", form_int(view_days))
+    stmt = delete(CallLog).where(
+        CallLog.started_at < datetime.now() - timedelta(days=n)
+    )
     if direction in ("in", "out"):
         stmt = stmt.where(CallLog.direction == direction)
-    if days > 0:
-        stmt = stmt.where(CallLog.started_at < datetime.now() - timedelta(days=days))
-    await db.execute(stmt)
+    result = await db.execute(stmt)
     await db.commit()
-    label = "より古い履歴" if days > 0 else "履歴"
-    return _back(direction, f"{label}を削除しました。")
+    return _back(
+        direction,
+        f"{n} 日より古い履歴を {result.rowcount} 件削除しました。",
+        form_int(view_days),
+    )
 
 
-def _back(direction: str, message: str) -> RedirectResponse:
+def _back(
+    direction: str, message: str, days: int | None = None, q: str = ""
+) -> RedirectResponse:
+    """一覧に戻る。削除した後も、それまでの表示期間・絞り込みを保つ。"""
     from urllib.parse import quote
 
     d = direction if direction in ("in", "out") else "in"
-    return RedirectResponse(
-        f"/call-logs/?direction={d}&message={quote(message)}",
-        status_code=status.HTTP_303_SEE_OTHER,
+    url = f"/call-logs/?direction={d}&message={quote(message)}"
+    if days:
+        url += f"&days={max(1, min(days, 365))}"
+    if q.strip():
+        url += f"&q={quote(q.strip())}"
+    return RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/{log_id}/delete")
+async def delete_log(
+    log_id: int,
+    direction: str = Form("in"),
+    days: str = Form(""),
+    q: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+) -> RedirectResponse:
+    """履歴を 1 件削除する。"""
+    obj = await db.get(CallLog, log_id)
+    if obj is not None:
+        direction = obj.direction
+        await db.delete(obj)
+        await db.commit()
+        msg = "履歴を 1 件削除しました。"
+    else:
+        msg = "削除する履歴が見つかりませんでした (すでに削除されています)。"
+    return _back(direction, msg, form_int(days), q)
+
+
+@router.post("/delete-bulk")
+async def delete_logs_bulk(
+    request: Request,
+    direction: str = Form("in"),
+    days: str = Form(""),
+    q: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+) -> RedirectResponse:
+    """一覧でチェックした複数件をまとめて削除する。
+
+    ID は画面から来る想定だが、URL を直接叩けば数字以外も届くので、
+    int に変換できないものは黙って無視する (500 にしない)。
+    """
+    raw = await request.form()
+    ids = [i for i in (form_int(v) for v in raw.getlist("log_ids")) if i]
+    if not ids:
+        return _back(direction, "削除する履歴が選択されていません。", form_int(days), q)
+    result = await db.execute(delete(CallLog).where(CallLog.id.in_(ids)))
+    await db.commit()
+    return _back(
+        direction, f"履歴を {result.rowcount} 件削除しました。", form_int(days), q
     )

@@ -45,22 +45,39 @@
   </p>
 </div>
 {% else %}
+{# 一括削除用のフォーム本体は空にして表の外に置き、各行のチェックボックスは
+   form="cl-bulk-delete-form" で紐付ける (FAX・留守番電話の画面と同じ作り)。
+   行の中には電話帳登録などの別フォームがあり、フォームは入れ子にできないため。 #}
+<form method="post" action="/call-logs/delete-bulk" id="cl-bulk-delete-form"
+      onsubmit="return confirm('選択した ' + document.querySelectorAll('.cl-row-check:checked').length + ' 件の履歴を削除しますか？');">
+  <input type="hidden" name="direction" value="{{ direction }}">
+  <input type="hidden" name="days" value="{{ days }}">
+  <input type="hidden" name="q" value="{{ q }}">
+</form>
+<div class="form-hint" style="display:flex;align-items:center;gap:12px;margin:12px 0 8px;">
+  <button type="submit" form="cl-bulk-delete-form" class="btn btn--small btn--danger"
+          id="cl-bulk-delete-btn" disabled>選択した項目を削除</button>
+  <span id="cl-bulk-delete-count" style="color:var(--c-text-muted,#666);font-size:13px;"></span>
+</div>
 <div class="table-scroll">
 <table class="data-table">
   <thead>
     <tr>
+      <th style="width:32px"><input type="checkbox" id="cl-select-all" title="すべて選択"></th>
       <th style="min-width:150px">日時</th>
       <th style="min-width:130px">{{ "発信元" if direction == "in" else "発信先" }}</th>
       <th style="min-width:150px">{{ "着信先" if direction == "in" else "経由" }}</th>
       <th style="min-width:90px">結果</th>
       <th style="min-width:80px">通話時間</th>
-      <th style="min-width:60px"></th>
+      <th style="min-width:110px"></th>
     </tr>
   </thead>
   <tbody>
     {% for it in items %}
     {% set log = it.log %}
     <tr>
+      <td><input type="checkbox" name="log_ids" value="{{ log.id }}"
+                 class="cl-row-check" form="cl-bulk-delete-form"></td>
       <td class="mono">{{ log.started_at.strftime("%Y-%m-%d %H:%M") }}</td>
       <td>
         <span class="mono">{{ log.peer_number }}</span>
@@ -137,6 +154,13 @@
           </div>
         </details>
         {% endif %}
+        <form method="post" action="/call-logs/{{ log.id }}/delete" style="display:inline"
+              onsubmit="return confirm('この履歴を削除しますか？');">
+          <input type="hidden" name="direction" value="{{ direction }}">
+          <input type="hidden" name="days" value="{{ days }}">
+          <input type="hidden" name="q" value="{{ q }}">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
       </td>
     </tr>
     {% endfor %}
@@ -151,11 +175,35 @@
       onsubmit="return confirm('90 日より古い{{ '着信' if direction == 'in' else '発信' }}履歴を削除しますか?')">
   <input type="hidden" name="direction" value="{{ direction }}">
   <input type="hidden" name="days" value="90">
+  <input type="hidden" name="view_days" value="{{ days }}">
   <button type="submit" class="btn btn--small">90 日より古い履歴を削除</button>
 </form>
 {% endif %}
 
 <script>
+(function () {
+  // 一括削除: チェックした件数に応じてボタンを有効化し、件数を表示する
+  var selectAll = document.getElementById('cl-select-all');
+  if (!selectAll) return;
+  var rowChecks = Array.prototype.slice.call(document.querySelectorAll('.cl-row-check'));
+  var bulkBtn = document.getElementById('cl-bulk-delete-btn');
+  var countLabel = document.getElementById('cl-bulk-delete-count');
+
+  function refresh() {
+    var checked = rowChecks.filter(function (c) { return c.checked; });
+    bulkBtn.disabled = checked.length === 0;
+    countLabel.textContent = checked.length > 0 ? checked.length + ' 件選択中' : '';
+    selectAll.checked = checked.length > 0 && checked.length === rowChecks.length;
+    selectAll.indeterminate = checked.length > 0 && checked.length < rowChecks.length;
+  }
+  selectAll.addEventListener('change', function () {
+    rowChecks.forEach(function (c) { c.checked = selectAll.checked; });
+    refresh();
+  });
+  rowChecks.forEach(function (c) { c.addEventListener('change', refresh); });
+  refresh();
+})();
+
 (function () {
   // サブメニュー (三点リーダ) の位置を、開いたボタンに合わせて画面基準で
   // 決める。テーブルの overflow:hidden に切り取られるのを避けるため
