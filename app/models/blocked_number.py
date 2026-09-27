@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Integer, String
+from sqlalchemy import Boolean, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -26,11 +26,22 @@ class BlockedNumber(Base):
     パターンマッチ、そうでなければ完全一致として扱う。"""
 
     action: Mapped[str] = mapped_column(String(16), default="hangup")
-    """一致した場合の処理: "hangup" (即切断) / "voicemail" (指定内線の
-    留守番電話へ)。"""
+    """一致した場合の処理:
+       "hangup"          … 応答せずに即切断 (相手に通話料がかからない)
+       "playback_hangup" … 応答してメッセージを流してから切断
+       "voicemail"       … 指定内線の留守番電話へ"""
 
     voicemail_target: Mapped[str | None] = mapped_column(String(16), nullable=True)
     """action が voicemail の場合の転送先内線番号。"""
+
+    audio_id: Mapped[int | None] = mapped_column(
+        ForeignKey("audio_files.id", ondelete="SET NULL"), nullable=True
+    )
+    """action が playback_hangup の場合に流す音源。
+
+    「お客様の都合によりお繋ぎできません」といった案内を流してから
+    切断したいとき用。音源が削除された場合は NULL に戻り、
+    ダイヤルプラン生成側では「音源なし = 即切断」に安全側で倒す。"""
 
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     """登録理由等のメモ (例: 「しつこい勧誘」)。"""

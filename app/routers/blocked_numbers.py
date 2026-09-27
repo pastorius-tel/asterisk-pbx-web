@@ -15,7 +15,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import BlockedNumber, Extension
+from app.models import AudioFile, BlockedNumber, Extension
+from app.routers._helpers import form_int
 from app.schemas.blocked_number import BlockedNumberForm
 
 router = APIRouter(prefix="/blocked-numbers", tags=["blocked_numbers"])
@@ -30,14 +31,34 @@ async def _extension_choices(db: AsyncSession) -> list[dict[str, str]]:
     return [{"value": e.extension, "label": f"{e.extension} {e.display_name}"} for e in rows]
 
 
+async def _audio_choices(db: AsyncSession) -> list[dict[str, str]]:
+    """「メッセージを流して切断」で選べる音源の一覧。
+
+    変換が完了しているものだけを出す (変換前/失敗の音源を選べてしまうと、
+    着信時に存在しないファイルを再生しようとして通話が異常終了する)。
+    """
+    rows = (
+        await db.scalars(
+            select(AudioFile)
+            .where(AudioFile.conversion_status == "ok")
+            .order_by(AudioFile.name)
+        )
+    ).all()
+    return [{"value": str(a.id), "label": a.name} for a in rows]
+
+
 @router.get("/", response_class=HTMLResponse)
 async def list_blocked_numbers(
     request: Request, db: AsyncSession = Depends(get_db)
 ) -> HTMLResponse:
     rows = (await db.scalars(select(BlockedNumber).order_by(BlockedNumber.id.desc()))).all()
+    # 一覧で音源名を出すための対応表 (削除済みの音源は名前が引けない)
+    audio_names = {
+        a.id: a.name for a in (await db.scalars(select(AudioFile))).all()
+    }
     return request.app.state.templates.TemplateResponse(
         request, "blocked_numbers/list.html",
-        {"items": rows, "title": "迷惑電話ブロックリスト"},
+        {"items": rows, "title": "迷惑電話ブロックリスト", "audio_names": audio_names},
     )
 
 
@@ -50,6 +71,7 @@ async def new_blocked_number_form(
         {
             "item": None, "form_action": "/blocked-numbers/", "title": "ブロック番号の追加",
             "ext_choices": await _extension_choices(db),
+            "audio_choices": await _audio_choices(db),
         },
     )
 
@@ -75,6 +97,7 @@ async def edit_blocked_number_form(
             "item": obj, "form_action": f"/blocked-numbers/{b_id}",
             "title": f"ブロック番号の編集 — {obj.pattern}",
             "ext_choices": await _extension_choices(db),
+            "audio_choices": await _audio_choices(db),
         },
     )
 
@@ -107,6 +130,7 @@ async def _save(request, db: AsyncSession, raw, instance: BlockedNumber | None):
         "pattern": raw.get("pattern", ""),
         "action": raw.get("action", "hangup"),
         "voicemail_target": raw.get("voicemail_target") or None,
+        "audio_id": form_int(raw.get("audio_id")),
         "note": raw.get("note") or None,
         "enabled": "enabled" in raw,
     }
@@ -128,6 +152,7 @@ async def _save(request, db: AsyncSession, raw, instance: BlockedNumber | None):
                 "errors": errors,
                 "submitted": data,
                 "ext_choices": await _extension_choices(db),
+                "audio_choices": await _audio_choices(db),
             },
             status_code=400,
         )

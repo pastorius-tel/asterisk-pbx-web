@@ -15,9 +15,12 @@ class BlockedNumberForm(BaseModel):
     パターン (前方一致等)。"""
 
     action: str = Field(default="hangup")
-    """"hangup" (即切断) / "voicemail" (指定内線の留守番電話へ)。"""
+    """"hangup" (応答せず即切断) / "playback_hangup" (メッセージを流して
+    から切断) / "voicemail" (指定内線の留守番電話へ)。"""
 
     voicemail_target: str | None = Field(default=None, max_length=16)
+    audio_id: int | None = Field(default=None, ge=1)
+    """action が playback_hangup の場合に流す音源の ID。"""
     note: str | None = Field(default=None, max_length=255)
     enabled: bool = True
 
@@ -37,14 +40,27 @@ class BlockedNumberForm(BaseModel):
     @field_validator("action")
     @classmethod
     def _validate_action(cls, v: str) -> str:
-        if v not in ("hangup", "voicemail"):
+        if v not in ("hangup", "playback_hangup", "voicemail"):
             raise ValueError(f"不正な action です: {v}")
         return v
 
     @model_validator(mode="after")
-    def _require_target_for_voicemail(self) -> BlockedNumberForm:
+    def _check_action_requirements(self) -> BlockedNumberForm:
+        """動作ごとに必要な項目が揃っているか確認し、不要な項目は消す。
+
+        不要な項目を残したままにすると、動作を切り替えたときに
+        「前に選んだ音源が残っていて意図せず再生される」といった
+        分かりにくい状態になるため、ここで明示的に None にする。
+        """
         if self.action == "voicemail" and not self.voicemail_target:
             raise ValueError("留守番電話への転送を選ぶ場合、転送先の内線を選択してください。")
-        if self.action == "hangup":
+        if self.action == "playback_hangup" and not self.audio_id:
+            raise ValueError(
+                "メッセージを流して切断する場合、流す音源を選択してください。"
+                "音源は「音源」画面でアップロードするか、文章から作成できます。"
+            )
+        if self.action != "voicemail":
             self.voicemail_target = None
+        if self.action != "playback_hangup":
+            self.audio_id = None
         return self
