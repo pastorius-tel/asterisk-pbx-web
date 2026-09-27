@@ -1,0 +1,104 @@
+{# ========================================================================
+   汎用フォーム部品マクロ集
+
+   各マクロは item / submitted / default を受け取り、内部で値解決する。
+     優先度: submitted > item.attr > default
+   ======================================================================== #}
+
+
+{% macro _resolve(name, item, submitted, default) -%}
+{%- if submitted and name in submitted and submitted[name] is not none -%}
+{{- submitted[name] -}}
+{%- elif item and item[name] is not none -%}
+{{- item[name] -}}
+{%- else -%}
+{{- default -}}
+{%- endif -%}
+{%- endmacro %}
+
+
+{% macro field_text(name, label, item=None, submitted=None, default="", required=False, placeholder="", help="", pattern=None, type="text", monospace=False) %}
+{%- set value = _resolve(name, item, submitted, default) -%}
+<label class="field">
+  <span class="field__label">{{ label }}{% if required %}<em class="req">*</em>{% endif %}</span>
+  <input class="field__input{% if monospace %} field__input--mono{% endif %}"
+         type="{{ type }}"
+         name="{{ name }}"
+         value="{{ value|trim }}"
+         {% if required %}required{% endif %}
+         {% if placeholder %}placeholder="{{ placeholder }}"{% endif %}
+         {% if pattern %}pattern="{{ pattern }}"{% endif %}>
+  {% if help %}<small class="field__help">{{ help }}</small>{% endif %}
+</label>
+{% endmacro %}
+
+
+{% macro field_number(name, label, item=None, submitted=None, default=0, min=None, max=None, step=1, help="", required=False) %}
+{%- set value = _resolve(name, item, submitted, default) -%}
+<label class="field">
+  <span class="field__label">{{ label }}{% if required %}<em class="req">*</em>{% endif %}</span>
+  <input class="field__input field__input--mono"
+         type="number"
+         name="{{ name }}"
+         value="{{ value }}"
+         step="{{ step }}"
+         {% if min is not none %}min="{{ min }}"{% endif %}
+         {% if max is not none %}max="{{ max }}"{% endif %}
+         {% if required %}required{% endif %}>
+  {% if help %}<small class="field__help">{{ help }}</small>{% endif %}
+</label>
+{% endmacro %}
+
+
+{% macro field_select(name, label, options, item=None, submitted=None, default="", required=False, help="", allow_empty=False) %}
+{%- set value = _resolve(name, item, submitted, default) -%}
+{%- set value_str = value|string -%}
+<label class="field">
+  <span class="field__label">{{ label }}{% if required %}<em class="req">*</em>{% endif %}</span>
+  <select class="field__select" name="{{ name }}" {% if required %}required{% endif %}>
+    {% if allow_empty %}<option value="" {% if value_str == "" or value_str == "None" %}selected{% endif %}>— 選択してください —</option>{% endif %}
+    {% for opt in options %}
+      <option value="{{ opt.value }}" {% if value_str == opt.value|string %}selected{% endif %}>
+        {{ opt.label }}
+      </option>
+    {% endfor %}
+  </select>
+  {% if help %}<small class="field__help">{{ help }}</small>{% endif %}
+</label>
+{% endmacro %}
+
+
+{% macro field_toggle(name, label, item=None, submitted=None, default=False, help="") %}
+{%- if submitted and name in submitted -%}
+  {%- set value = submitted[name] in (true, "on", "true", "1", 1, True) -%}
+{%- elif item and item[name] is not none -%}
+  {%- set value = item[name] -%}
+{%- else -%}
+  {%- set value = default -%}
+{%- endif -%}
+<label class="field field--toggle">
+  <span class="field__label">{{ label }}</span>
+  <span class="toggle">
+    <input type="checkbox" name="{{ name }}" {% if value %}checked{% endif %}>
+    <span class="toggle__track"><span class="toggle__thumb"></span></span>
+    <span class="toggle__hint">{{ "有効" if value else "無効" }}</span>
+  </span>
+  {% if help %}<small class="field__help">{{ help }}</small>{% endif %}
+</label>
+{% endmacro %}
+
+
+{% macro errors_block(errors) %}
+{% if errors %}
+<div class="errors" role="alert">
+  <strong>入力に問題があります</strong>
+  <ul>
+    {% for e in errors %}
+      <li>
+        <code>{{ e.loc|join(".") }}</code>: {{ e.msg }}
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endmacro %}

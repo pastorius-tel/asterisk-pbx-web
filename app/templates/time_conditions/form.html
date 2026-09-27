@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_toggle, errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+{% if no_patterns %}
+<div class="empty">
+  <p>先に「日次パターン」を作成してください。</p>
+  <p class="empty__hint">
+    時間条件は曜日ごとに「日次パターン」(例: 平日 9-18時 ON) を割り当てて
+    使います。まず日次パターンを 1 つ以上作成してください。
+  </p>
+  <a href="/day-patterns/new" class="btn btn--primary">日次パターンを追加</a>
+</div>
+{% else %}
+
+<form method="post" action="{{ form_action }}" class="form-grid" autocomplete="off"
+      onsubmit="return __tcSplitDest()">
+
+  <fieldset class="form-section">
+    <legend>基本情報</legend>
+    {{ field_text("name", "名前 (英数字)", item=item, submitted=submitted, required=True,
+                  placeholder="business-hours", pattern="[A-Za-z0-9_\-]+", monospace=True,
+                  help="ダイヤルプランの内部名として使われます。半角英数字・ハイフン・アンダースコアのみ。") }}
+    <div class="form-row">
+      {{ field_toggle("enabled", "有効化", item=item, submitted=submitted, default=True) }}
+      {{ field_toggle("use_calendar_exceptions", "カレンダー例外 (祝日等) を考慮する", item=item, submitted=submitted, default=True,
+                      help="無効にすると、この時間条件だけは祝日・盆休み等を無視して曜日パターンのみで判定します。") }}
+    </div>
+    {{ field_text("note", "メモ", item=item, submitted=submitted) }}
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>曜日ごとの日次パターン</legend>
+    <p class="form-hint">
+      各曜日にどの<a href="/day-patterns/" target="_blank">日次パターン</a>を
+      適用するか選びます。「(終日休業)」のままにすると、その曜日は
+      一日中「時間外」として扱われます。祝日・盆休み・年末年始などの
+      個別の日付は、ここではなく
+      <a href="/calendar-exceptions/" target="_blank">カレンダー例外</a>
+      画面でまとめて管理してください (曜日パターンより優先されます)。
+    </p>
+    <div class="form-row" style="flex-wrap:wrap;gap:12px 16px;">
+      {% for field, jp in [("mon","月"),("tue","火"),("wed","水"),("thu","木"),("fri","金"),("sat","土"),("sun","日")] %}
+      <label class="field" style="min-width:140px;flex:1 1 140px;">
+        <span class="field__label">{{ jp }}曜日</span>
+        <select class="field__select" name="{{ field }}_pattern_id">
+          <option value="" {% if not (item and item[field ~ "_pattern_id"]) and not (submitted and submitted[field ~ "_pattern_id"]) %}selected{% endif %}>(終日休業)</option>
+          {% for opt in pattern_choices %}
+          <option value="{{ opt.value }}"
+            {% if submitted %}{% if submitted[field ~ "_pattern_id"]|string == opt.value %}selected{% endif %}
+            {% elif item and item[field ~ "_pattern_id"]|string == opt.value %}selected{% endif %}>
+            {{ opt.label }}
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>転送先</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">時間内の転送先<em class="req">*</em></span>
+        <select class="field__select" id="tc_inside_choice" required></select>
+      </label>
+      <label class="field">
+        <span class="field__label">時間外の転送先<em class="req">*</em></span>
+        <select class="field__select" id="tc_outside_choice" required></select>
+      </label>
+    </div>
+    <p class="form-hint">
+      「切断」を選ぶと、対象の時間帯にかかってきた電話をそのまま切断します。
+    </p>
+    <input type="hidden" name="inside_type" id="tc_inside_type">
+    <input type="hidden" name="inside_value" id="tc_inside_value">
+    <input type="hidden" name="outside_type" id="tc_outside_type">
+    <input type="hidden" name="outside_value" id="tc_outside_value">
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/time-conditions/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+
+<script>
+(function () {
+  const groups = [
+    ["内線", "extension", {{ dest_choices.extension | tojson }}],
+    ["リンググループ", "ring_group", {{ dest_choices.ring_group | tojson }}],
+    ["キュー", "queue", {{ dest_choices.queue | tojson }}],
+    ["IVR", "ivr", {{ dest_choices.ivr | tojson }}],
+    ["ボイスメール", "voicemail", {{ dest_choices.voicemail | tojson }}],
+  ];
+  const curInsideType = {{ (submitted.inside_type if submitted else (item.inside_type if item else "extension")) | tojson }};
+  const curInsideValue = {{ (submitted.inside_value if submitted else (item.inside_value if item else "")) | tojson }};
+  const curOutsideType = {{ (submitted.outside_type if submitted else (item.outside_type if item else "voicemail")) | tojson }};
+  const curOutsideValue = {{ (submitted.outside_value if submitted else (item.outside_value if item else "")) | tojson }};
+
+  function buildSelect(selectEl, curType, curValue) {
+    selectEl.innerHTML = "";
+    for (const [label, type, options] of groups) {
+      if (!options.length) continue;
+      const og = document.createElement("optgroup");
+      og.label = label;
+      for (const opt of options) {
+        const o = document.createElement("option");
+        o.value = type + ":" + opt.value;
+        o.textContent = opt.label;
+        if (type === curType && opt.value === curValue) o.selected = true;
+        og.appendChild(o);
+      }
+      selectEl.appendChild(og);
+    }
+    const hangupOpt = document.createElement("option");
+    hangupOpt.value = "hangup:-";
+    hangupOpt.textContent = "切断";
+    if (curType === "hangup") hangupOpt.selected = true;
+    selectEl.appendChild(hangupOpt);
+  }
+
+  buildSelect(document.getElementById("tc_inside_choice"), curInsideType, curInsideValue);
+  buildSelect(document.getElementById("tc_outside_choice"), curOutsideType, curOutsideValue);
+
+  window.__tcSplitDest = function () {
+    const inside = document.getElementById("tc_inside_choice").value.split(":");
+    const outside = document.getElementById("tc_outside_choice").value.split(":");
+    document.getElementById("tc_inside_type").value = inside[0];
+    document.getElementById("tc_inside_value").value = inside.slice(1).join(":");
+    document.getElementById("tc_outside_type").value = outside[0];
+    document.getElementById("tc_outside_value").value = outside.slice(1).join(":");
+    return true;
+  };
+})();
+</script>
+{% endif %}
+{% endblock %}

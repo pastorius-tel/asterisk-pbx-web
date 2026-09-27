@@ -45,6 +45,10 @@
       <td class="mono">{{ it.pattern }}</td>
       <td>
         {% if it.action == "hangup" %}<span class="badge badge--err">即切断</span>
+        {% elif it.action == "playback_hangup" %}
+          <span class="badge">メッセージ後に切断</span>
+          {% if it.audio_id %}<br><small>{{ audio_names.get(it.audio_id, "音源が見つかりません") }}</small>
+          {% else %}<br><small class="badge badge--off">音源未設定 (即切断になります)</small>{% endif %}
         {% else %}<span class="badge">留守電へ ({{ it.voicemail_target }})</span>{% endif %}
       </td>
       <td>{{ it.note or "-" }}</td>

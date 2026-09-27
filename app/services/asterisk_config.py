@@ -367,13 +367,22 @@ def _voicemail_hook_setup_lines(mailbox_expr: str) -> str:
     )
 
 
-def _render_nuisance_lookup_contexts(blocked_numbers: list[BlockedNumber]) -> str:
+def _render_nuisance_lookup_contexts(
+    blocked_numbers: list[BlockedNumber],
+    audio_files: dict[int, AudioFile] | None = None,
+) -> str:
     """迷惑電話ブロックリスト・国際着信判定用の共通 Gosub サブルーチンを
     生成する。[from-trunk-*] の入口から Gosub(...,${CALLERID(num)},1) で
     呼ばれ、判定結果を Return() 経由の GOSUB_RETVAL で返す。
 
-    - [nuisance-blocklist-check]: 一致すれば "hangup" または
-      "voicemail:<内線>" を返す。一致しなければ空文字列。
+    - [nuisance-blocklist-check]: 一致すれば次のいずれかを返す。
+      一致しなければ空文字列。
+        "hangup"              … 応答せず即切断
+        "playback:<音源参照>" … 応答してメッセージを流してから切断
+        "voicemail:<内線>"    … 指定内線の留守番電話へ
+      戻り値は "種別:引数" の形なので、呼び出し側は CUT() で分解する
+      (引数の長さが種別ごとに違うため、${VAR:10} のような固定長の
+       切り出しは使わない)。音源参照にコロンは含まれない。
     - [nuisance-intl-check]: 発信者番号が日本の標準的な国内番号
       パターン (0 で始まる携帯電話・固定電話・IP電話・フリーダイヤル等)
       に一致すれば "0" (国内)、一致しなければ "1" (海外/形式不明の
@@ -393,10 +402,26 @@ def _render_nuisance_lookup_contexts(blocked_numbers: list[BlockedNumber]) -> st
         pat = _pattern(bn.pattern)
         if not pat or not _is_valid_exten_pattern(pat):
             continue
-        target = _dial(bn.voicemail_target)
-        if bn.action != "hangup" and not target:
-            continue
-        ret = "hangup" if bn.action == "hangup" else f"voicemail:{target}"
+
+        if bn.action == "voicemail":
+            target = _dial(bn.voicemail_target)
+            if not target:
+                continue  # 転送先が無い留守番電話設定は無視する
+            ret = f"voicemail:{target}"
+        elif bn.action == "playback_hangup":
+            audio = (audio_files or {}).get(bn.audio_id or 0)
+            if audio is None or audio.conversion_status != "ok":
+                # 音源が削除された / 変換に失敗している場合は、
+                # 存在しないファイルを Playback して通話が異常終了する
+                # のを避け、案内なしの即切断に倒す (ブロック自体は効かせる)。
+                ret = "hangup"
+            else:
+                ret = (
+                    "playback:"
+                    + asterisk_sound_reference(audio.category, audio.storage_name)
+                )
+        else:
+            ret = "hangup"
         out.write(f"exten => {pat},1,Return({ret})\n")
     out.write("exten => _X!,1,Return()\n")
     out.write("exten => s,1,Return()\n")
@@ -442,17 +467,35 @@ def _nuisance_check_block(
     (例: 着信ルートごとに 1 つずつ) は、route.id 等の一意な値を渡す
     こと。省略時 (トランクの入口に 1 回だけ挿入する場合) は不要。
     """
-    intl_action = app_settings.international_call_action
+    # 国際着信の扱い。
+    #
+    # 注意: app_settings は DB の行が無いときに AppSettings() を new した
+    # だけのインスタンスが渡ってくることがある。SQLAlchemy の default= は
+    # INSERT のときに適用されるため、new しただけの状態では **None** に
+    # なっている。None をそのまま使うと `None != "none"` が成立して
+    # 国際着信ブロックが意図せず有効になり、さらに転送先も None のため
+    # `VoiceMail(None@default)` という壊れた行が生成されていた
+    # (初回インストール直後の 1 回目の反映で発生する)。
+    # ここで未設定はすべて "none" (何もしない) に倒す。
+    intl_action = app_settings.international_call_action or "none"
+    intl_target = _dial(app_settings.international_voicemail_target)
+    if intl_action == "voicemail" and not intl_target:
+        # 転送先が未選択のまま「留守番電話へ」になっている場合は、
+        # 存在しないメールボックスへ入れようとして通話が異常終了する。
+        # 設定が未完成とみなして国際着信の判定自体を行わない。
+        intl_action = "none"
     if not has_blocklist and intl_action == "none":
         return ""
 
     hit_label = f"nuisance_hit{label_suffix}"
     hangup_label = f"nuisance_hangup{label_suffix}"
+    play_label = f"nuisance_play{label_suffix}"
     skip_label = f"nuisance_skip{label_suffix}"
     # Goto()/GotoIf() のジャンプ先は必ずこの完全形式 (コンテキスト名を
     # 明示) で組み立てる。単一ラベルの曖昧な解釈を避けるため。
     hit_dest = f"{context_name},{hit_label},1"
     hangup_dest = f"{context_name},{hangup_label},1"
+    play_dest = f"{context_name},{play_label},1"
     skip_dest = f"{context_name},{skip_label},1"
 
     out = io.StringIO()
@@ -469,7 +512,7 @@ def _nuisance_check_block(
             out.write(" same => n,Set(__NUISANCE_ACTION=hangup)\n")
         else:
             out.write(
-                f" same => n,Set(__NUISANCE_ACTION=voicemail:{app_settings.international_voicemail_target})\n"
+                f" same => n,Set(__NUISANCE_ACTION=voicemail:{intl_target})\n"
             )
         # 国際判定でヒットした場合はここに来るので、明示的に hit_dest へ
         # 飛ぶ (Asterisk は同一コンテキスト内でも、別の exten 宣言へ暗黙に
@@ -478,11 +521,54 @@ def _nuisance_check_block(
     # ここに到達するのは「ブロックリストのみ有効でヒットしなかった」場合。
     # 安全側で必ず skip (通常経路) へ進める。
     out.write(f" same => n,Goto({skip_dest})\n")
-    out.write(f"exten => {hit_label},1,NoOp(迷惑電話判定によりブロック: ${{CALLERID(num)}} -> ${{NUISANCE_ACTION}})\n")
-    out.write(f' same => n,GotoIf($["${{NUISANCE_ACTION}}" = "hangup"]?{hangup_dest})\n')
-    out.write(_voicemail_hook_setup_lines("${NUISANCE_ACTION:10}"))
-    out.write(" same => n,VoiceMail(${NUISANCE_ACTION:10}@default)\n")
+    # ---- ブロック確定後の処理 ----
+    #
+    # 着信処理の順番として重要な点:
+    #
+    #  1. ここに来た時点では、まだ Answer() していない。着信の入口
+    #     ([from-trunk-*] / 着信ルートの先頭) で、DID 振り分けより前に
+    #     判定しているため、内線を鳴らすことは一切ない。
+    #  2. __NUISANCE_BLOCKED=1 を立ててから応答する。これは FAX の CNG
+    #     検知対策 ([fax-safety-net] 参照)。応答するとチャネルが音声を
+    #     受け取り始め、相手が FAX 機だと CNG トーン検知で 'fax'
+    #     エクステンションへ飛ばされる。そのままだとブロックしたはずの
+    #     相手から FAX を受信してしまうため、この変数で抑止する。
+    #  3. 発着信履歴には「迷惑電話ブロック」として残す (CL_BLOCKED=1)。
+    #     ハングアップハンドラーは入口で登録済みなので、ここでは
+    #     着信先の情報を上書きするだけでよい。
+    out.write(
+        f"exten => {hit_label},1,NoOp(迷惑電話判定によりブロック: "
+        "${CALLERID(num)} -> ${NUISANCE_ACTION})\n"
+    )
+    out.write(" same => n,Set(__NUISANCE_BLOCKED=1)\n")
+    out.write(" same => n,Set(__CL_BLOCKED=1)\n")
+    for _a in _calllog_dest_actions("hangup", "", "迷惑電話ブロック"):
+        out.write(f" same => n,{_a}\n")
+    # 戻り値を「種別」と「引数」に分ける (引数の長さが種別ごとに違うため、
+    # 固定長の切り出しではなく CUT を使う)
+    out.write(" same => n,Set(NUISANCE_KIND=${CUT(NUISANCE_ACTION,:,1)})\n")
+    out.write(" same => n,Set(NUISANCE_ARG=${CUT(NUISANCE_ACTION,:,2)})\n")
+    out.write(f' same => n,GotoIf($["${{NUISANCE_KIND}}" = "hangup"]?{hangup_dest})\n')
+    out.write(f' same => n,GotoIf($["${{NUISANCE_KIND}}" = "playback"]?{play_dest})\n')
+
+    # --- 留守番電話へ回す ---
+    out.write(_voicemail_hook_setup_lines("${NUISANCE_ARG}"))
+    out.write(" same => n,VoiceMail(${NUISANCE_ARG}@default)\n")
     out.write(" same => n,Hangup()\n")
+
+    # --- メッセージを流してから切断 ---
+    #
+    # Answer() の直後に少しだけ待つ。応答してから音声パス (RTP) が
+    # 通るまでにわずかな時間があり、間を置かずに Playback() すると
+    # 先頭が欠けて聞こえることがあるため。
+    out.write(f"exten => {play_label},1,NoOp(迷惑電話: 案内を再生して切断)\n")
+    out.write(" same => n,Answer()\n")
+    out.write(" same => n,Wait(1)\n")
+    out.write(" same => n,Playback(${NUISANCE_ARG})\n")
+    out.write(" same => n,Hangup()\n")
+
+    # --- 応答せず即切断 ---
+    # Answer() しないので相手に通話料が発生せず、最も早く切れる。
     out.write(f"exten => {hangup_label},1,Hangup()\n")
     out.write(f"exten => {skip_label},1,NoOp()\n")
     return out.getvalue()
@@ -957,13 +1043,25 @@ async def render_extensions_conf(db: AsyncSession) -> str:
     # 迷惑電話ブロックリスト・国際着信判定 (トランク着信の入口で共通利用)
     app_settings_row = (await db.scalars(select(AppSettings).limit(1))).first()
     if app_settings_row is None:
+        # DB に行がまだ無いとき用のフォールバック。
+        # new しただけでは default= が適用されず None になるため、
+        # 判定に使う項目は明示的に安全側の値を入れておく。
         app_settings_row = AppSettings()
+        app_settings_row.international_call_action = "none"
     blocked_numbers = (
         await db.scalars(select(BlockedNumber).where(BlockedNumber.enabled.is_(True)))
     ).all()
     has_blocklist = len(blocked_numbers) > 0
     if has_blocklist or app_settings_row.international_call_action != "none":
-        out.write(_render_nuisance_lookup_contexts(list(blocked_numbers)))
+        # 「メッセージを流してから切断」で使う音源を引けるようにする
+        # (音源が未設定/変換失敗なら、再生せず即切断に倒す)
+        nuisance_audio = {
+            a.id: a
+            for a in (await db.scalars(select(AudioFile))).all()
+        }
+        out.write(
+            _render_nuisance_lookup_contexts(list(blocked_numbers), nuisance_audio)
+        )
 
     # =========================================================
     # [general] / [globals]
@@ -1247,7 +1345,17 @@ async def render_extensions_conf(db: AsyncSession) -> str:
     out.write("\n[fax-safety-net]\n")
     if fax_cfg is not None and fax_cfg.enabled:
         out.write("exten => fax,1,NoOp(CNG detected -> FAX受信へ)\n")
-        out.write(" same => n,Goto(fax-receive,s,1)\n\n")
+        # 迷惑電話としてブロック中の通話は、FAX 受信へ回さずそのまま切る。
+        #
+        # 「メッセージを流してから切断」を選ぶと通話に応答するため、
+        # 相手が FAX 機だと CNG トーンが検知され、この 'fax' へ飛んで
+        # くる。抑止しないと **ブロックしたはずの相手から FAX を受信して
+        # しまう**。迷惑 FAX を止められないのは、この機能の趣旨と正反対
+        # になるため、ここで明示的に打ち切る。
+        out.write(' same => n,GotoIf($["${NUISANCE_BLOCKED}" = "1"]?blocked)\n')
+        out.write(" same => n,Goto(fax-receive,s,1)\n")
+        out.write(" same => n(blocked),NoOp(迷惑電話ブロック中のため FAX 受信しない)\n")
+        out.write(" same => n,Hangup()\n\n")
     else:
         # FAX 機能が無効なときは [fax-receive] 自体を生成しないため、
         # ここで Goto すると存在しないコンテキストへ飛んで

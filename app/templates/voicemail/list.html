@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/voicemail/config" class="btn">ファイル名設定</a>
+<a href="/extensions/" class="btn">内線のボイスメール設定へ</a>
+{% endblock %}
+
+{% block content %}
+
+{% if not storage_available %}
+<div class="form-hint" style="background:#f8d7da;border:1px solid #f1aeb5;padding:10px;border-radius:6px;">
+  <strong>ボイスメール保存先ディレクトリが見つかりません。</strong>
+  Asterisk 側でメッセージがまだ 1 件も録音されていない可能性があります。
+</div>
+{% endif %}
+
+{% if not extensions %}
+<div class="form-hint" style="background:#fff3cd;border:1px solid #ffe69c;padding:10px;border-radius:6px;">
+  ボイスメールが有効な内線がありません。<a href="/extensions/">内線一覧</a>の編集画面で
+  「ボイスメール」を有効にしてください。
+</div>
+{% endif %}
+
+<div class="form-hint">
+  内線から <code>*97</code> で自分の、<code>*98</code> で任意の内線のボイスメールに
+  電話機からアクセスできます。ここではブラウザから一覧・再生・削除ができます。
+</div>
+
+<form method="get" action="/voicemail/" class="form-row" style="margin-top:16px;max-width:320px;">
+  <label class="field">
+    <span class="field__label">内線で絞り込み</span>
+    <select class="field__select" name="extension" onchange="this.form.submit()">
+      <option value="">すべて</option>
+      {% for e in extensions %}
+      <option value="{{ e.extension }}" {% if selected_extension == e.extension %}selected{% endif %}>
+        {{ e.extension }} ({{ e.display_name }})
+      </option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+
+<h3 style="margin-top:20px;">メッセージ一覧</h3>
+
+{% if not messages %}
+<div class="empty"><p>ボイスメールのメッセージはまだありません。</p></div>
+{% else %}
+<form method="post" action="/voicemail/delete-bulk" id="vm-bulk-delete-form"
+      onsubmit="return confirm('選択した ' + document.querySelectorAll('.vm-row-check:checked').length + ' 件を削除しますか？');">
+</form>
+<div class="form-hint" style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+  <button type="submit" form="vm-bulk-delete-form" class="btn btn--small btn--danger" id="vm-bulk-delete-btn" disabled>選択した項目を削除</button>
+  <span id="vm-bulk-delete-count" style="color:var(--c-text-muted,#666);font-size:13px;"></span>
+</div>
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th><input type="checkbox" id="vm-select-all"></th>
+      <th>日時</th>
+      <th>内線</th>
+      <th>発信者</th>
+      <th>長さ</th>
+      <th>状態</th>
+      <th>再生</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in messages %}
+    <tr>
+      <td>
+        <input type="checkbox" name="vm_keys"
+               value="{{ m.extension }}:{{ m.folder }}:{{ m.msg_num }}"
+               class="vm-row-check" form="vm-bulk-delete-form">
+      </td>
+      <td class="mono">{{ m.when.strftime("%Y-%m-%d %H:%M") if m.when else "-" }}</td>
+      <td class="mono">{{ m.extension }} <span style="color:var(--c-text-muted,#666);">({{ ext_names.get(m.extension, "") }})</span></td>
+      <td class="mono">
+        {{ m.caller_number or "非通知/不明" }}
+        {% if m.caller_name %}<br><span style="color:var(--c-text-muted,#666);font-size:11px;">{{ m.caller_name }}</span>{% endif %}
+      </td>
+      <td class="mono">{{ (m.duration_sec ~ "秒") if m.duration_sec is not none else "-" }}</td>
+      <td>
+        {% if m.folder == "INBOX" %}
+          <span class="badge badge--ok">新着</span>
+        {% else %}
+          <span class="badge">聴取済</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if m.audio_path %}
+          <audio controls preload="none" style="height:32px;max-width:220px;">
+            <source src="/voicemail/{{ m.extension }}/{{ m.folder }}/{{ m.msg_num }}/play" type="audio/wav">
+          </audio>
+          <a href="/voicemail/{{ m.extension }}/{{ m.folder }}/{{ m.msg_num }}/download" class="btn btn--small">DL</a>
+        {% else %}
+          <span style="color:var(--c-text-muted,#666);">音声ファイル無し</span>
+        {% endif %}
+      </td>
+      <td>
+        <form method="post"
+              action="/voicemail/{{ m.extension }}/{{ m.folder }}/{{ m.msg_num }}/delete"
+              onsubmit="return confirm('このメッセージを削除しますか？');"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<script>
+(function () {
+  var selectAll = document.getElementById('vm-select-all');
+  var rowChecks = Array.prototype.slice.call(document.querySelectorAll('.vm-row-check'));
+  var bulkBtn = document.getElementById('vm-bulk-delete-btn');
+  var countLabel = document.getElementById('vm-bulk-delete-count');
+
+  function refresh() {
+    var checked = rowChecks.filter(function (c) { return c.checked; });
+    bulkBtn.disabled = checked.length === 0;
+    countLabel.textContent = checked.length > 0 ? checked.length + ' 件選択中' : '';
+    selectAll.checked = checked.length > 0 && checked.length === rowChecks.length;
+    selectAll.indeterminate = checked.length > 0 && checked.length < rowChecks.length;
+  }
+
+  selectAll.addEventListener('change', function () {
+    rowChecks.forEach(function (c) { c.checked = selectAll.checked; });
+    refresh();
+  });
+  rowChecks.forEach(function (c) { c.addEventListener('change', refresh); });
+  refresh();
+})();
+</script>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,17 @@
+<div class="apply-result__inner">
+  <h3>生成ファイル</h3>
+  <ul class="apply-result__files">
+    {% for f in written %}
+      <li><code>{{ f.path }}</code></li>
+    {% endfor %}
+  </ul>
+  <h3>AMI Reload 結果</h3>
+  <ul class="apply-result__reload">
+    {% for cmd, result in reload_results.items() %}
+      <li>
+        <code>{{ cmd }}</code>:
+        <span class="{{ 'ok' if result == 'OK' else 'ng' }}">{{ result }}</span>
+      </li>
+    {% endfor %}
+  </ul>
+</div>

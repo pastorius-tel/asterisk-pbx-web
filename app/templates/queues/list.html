@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/queues/new" class="btn btn--primary">+ キューを追加</a>
+{% endblock %}
+
+{% block content %}
+
+<p class="form-hint">
+  着信を「待ち行列」に入れて、対応可能な内線 (エージェント) に順次
+  割り振ります。リンググループとの違いは、全員話し中でも発信者を
+  保留音で待たせておける点です。着信ルートの転送先で「キュー」を
+  選ぶと使えます。
+</p>
+
+{% if not items %}
+<div class="empty">
+  <p>キューがありません。</p>
+  <p class="empty__hint">
+    例: 問い合わせ窓口で複数人が対応し、繁忙時は「待たせてでも
+    順番に繋ぐ」運用にしたい場合、ここで新規作成してメンバーに
+    チェックを入れてください。
+  </p>
+  <a href="/queues/new" class="btn btn--primary">キューを追加</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>番号</th>
+      <th>名前</th>
+      <th>戦略</th>
+      <th>メンバー</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td class="mono">{{ it.queue_number }}</td>
+      <td>{{ it.name }}</td>
+      <td class="mono">{{ it.strategy }}</td>
+      <td>{{ it.members|map(attribute='extension')|join(', ') if it.members else "(なし)" }}</td>
+      <td>
+        {% if it.enabled %}<span class="badge badge--ok">有効</span>
+        {% else %}<span class="badge badge--off">無効</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/queues/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/queues/{{ it.id }}/delete"
+              onsubmit="return confirm('キュー {{ it.name }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}
