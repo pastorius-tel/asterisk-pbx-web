@@ -37,6 +37,26 @@
 # ビルドを含むため、全体で 20〜40 分ほどかかります。
 # =============================================================================
 
+# ---------------------------------------------------------------------------
+# bash で実行されているか確認する
+#
+# `sh install_all.sh` のように起動されると、Ubuntu では sh の実体が dash に
+# なっているため `set -o pipefail` が無く、
+#   install_all.sh: 40: set: Illegal option -o pipefail
+# で即座に止まってしまう (シェバン行 #!/usr/bin/env bash は、sh に引数として
+# 渡された場合は無視されるため)。
+# ここで自分自身を bash で実行し直して、どちらの呼び出し方でも動くようにする。
+# ※ この判定は dash でも解釈できる書き方にしておくこと。
+# ---------------------------------------------------------------------------
+if [ -z "${BASH_VERSION:-}" ]; then
+    if command -v bash >/dev/null 2>&1; then
+        exec bash "$0" "$@"
+    fi
+    echo "エラー: このスクリプトの実行には bash が必要です。" >&2
+    echo "  sudo apt install -y bash" >&2
+    exit 1
+fi
+
 set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-/var/www/asterisk-pbx-web}"
@@ -77,7 +97,14 @@ echo " Asterisk PBX Web  初回インストール"
 echo "============================================================"
 echo "  インストール先 : $INSTALL_DIR"
 echo "  Web ポート     : $WEB_PORT"
-echo "  Asterisk       : ${SKIP_ASTERISK:+スキップ}${SKIP_ASTERISK:-$ASTERISK_VERSION をビルド}"
+# ${VAR:+A}${VAR:-B} は「設定済みなら A、未設定なら B」のつもりだったが、
+# 設定済みのときは後半の :- が変数の値そのもの (1) を返すため
+# 「スキップ1」と表示されていた。素直に if で分ける。
+if [ "${SKIP_ASTERISK:-0}" = "1" ]; then
+    echo "  Asterisk       : スキップ (SKIP_ASTERISK=1)"
+else
+    echo "  Asterisk       : $ASTERISK_VERSION をビルド"
+fi
 echo ""
 echo "  ビルドを含むため 20〜40 分ほどかかります。"
 echo "  実行中は全通話が使えません (新規構築を想定しています)。"

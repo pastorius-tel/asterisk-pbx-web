@@ -1,6 +1,6 @@
 [project]
 name = "asterisk-pbx-web"
-version = "0.5.0"
+version = "0.6.0"
 description = "Asterisk PBX Web Management System (Python / FastAPI)"
 readme = "README.md"
 requires-python = ">=3.11"

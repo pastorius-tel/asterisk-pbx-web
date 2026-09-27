@@ -26,6 +26,26 @@
 #   DOWNLOAD_URL     既定 "https://raw.githubusercontent.com/takao-t/asterisk-sound-ja/master/core-sound-ja.tgz"
 #   SKIP_RELOAD      "1" にすると最後の reload をスキップ
 
+# ---------------------------------------------------------------------------
+# bash で実行されているか確認する
+#
+# `sh install_all.sh` のように起動されると、Ubuntu では sh の実体が dash に
+# なっているため `set -o pipefail` が無く、
+#   install_all.sh: 40: set: Illegal option -o pipefail
+# で即座に止まってしまう (シェバン行 #!/usr/bin/env bash は、sh に引数として
+# 渡された場合は無視されるため)。
+# ここで自分自身を bash で実行し直して、どちらの呼び出し方でも動くようにする。
+# ※ この判定は dash でも解釈できる書き方にしておくこと。
+# ---------------------------------------------------------------------------
+if [ -z "${BASH_VERSION:-}" ]; then
+    if command -v bash >/dev/null 2>&1; then
+        exec bash "$0" "$@"
+    fi
+    echo "エラー: このスクリプトの実行には bash が必要です。" >&2
+    echo "  sudo apt install -y bash" >&2
+    exit 1
+fi
+
 set -euo pipefail
 
 SOUNDS_ROOT="${SOUNDS_ROOT:-/var/lib/asterisk/sounds}"
