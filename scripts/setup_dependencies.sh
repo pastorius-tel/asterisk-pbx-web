@@ -466,6 +466,35 @@ else
     log "${FAX_STORE} はまだありません (FAX 機能を有効化して初回受信すると作成されます)"
   fi
 
+  # 日時読み上げ用の音声 (digits/)
+  # 留守番電話の「録音日時の読み上げ」で使う。日本語音声パックには
+  # 含まれていないので本ツールが TTS で合成して書き込む。
+  DIGITS_DIR="/var/lib/asterisk/sounds/ja/digits"
+  if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
+    mkdir -p "$DIGITS_DIR"
+    chown -R asterisk:asterisk "$DIGITS_DIR" 2>/dev/null || true
+    chmod -R g+w "$DIGITS_DIR"
+    ok "${DIGITS_DIR} の権限を設定しました"
+  elif [ -d "$DIGITS_DIR" ]; then
+    skip "${DIGITS_DIR} は存在します (権限確認は FIX_PERMISSIONS=1 で実施)"
+  else
+    log "${DIGITS_DIR} はまだありません (日時読み上げ音声の生成時に作成されます)"
+  fi
+
+  # TTS 音響モデル (.htsvoice) の保存先
+  # apt で入る標準の声は /usr/share/hts-voice (root 所有) にあり書き込め
+  # ないため、画面から追加する声はこちらへ保存する。
+  HTS_DIR="/var/lib/asterisk-pbx-web/hts-voice"
+  if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
+    mkdir -p "$HTS_DIR"
+    chown -R "${APP_USER}:${APP_USER}" "$HTS_DIR" 2>/dev/null || true
+    ok "${HTS_DIR} を作成し所有者を ${APP_USER} にしました"
+  elif [ -d "$HTS_DIR" ]; then
+    skip "${HTS_DIR} は存在します (権限確認は FIX_PERMISSIONS=1 で実施)"
+  else
+    log "${HTS_DIR} はまだありません (声パックの追加時に作成されます)"
+  fi
+
   # 留守番電話スプール (一覧・再生・削除に読み書き権限が必要)
   VM_SPOOL="/var/spool/asterisk/voicemail"
   if [ -d "$VM_SPOOL" ]; then
@@ -582,7 +611,11 @@ else
 fi
 
 # 4. 追加の声 (任意)
-if [ -d /usr/share/hts-voice/tohoku-f01 ] || [ -d /usr/share/hts-voice/mei ]; then
+# 標準の置き場 (/usr/share/hts-voice) と、画面から追加したときの置き場
+# (/var/lib/asterisk-pbx-web/hts-voice) の両方を見る。
+if [ -d /usr/share/hts-voice/tohoku-f01 ] || [ -d /usr/share/hts-voice/mei ] \
+   || [ -d /var/lib/asterisk-pbx-web/hts-voice/tohoku-f01 ] \
+   || [ -d /var/lib/asterisk-pbx-web/hts-voice/mei ]; then
   echo "  [済] 音声合成の追加音響モデル (女性の声)"
 else
   echo "  [任意] 音声合成の声は標準 (男性) のみです。女性の声を追加するには:"
