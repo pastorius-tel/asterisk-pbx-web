@@ -458,7 +458,9 @@ async def generate_datetime_sounds(
         voice=dt_voice or None,
     )
     if errors:
-        msg = f"{created} 件生成しましたが、{len(errors)} 件失敗しました。"
+        # 失敗理由を添える。件数だけでは「なぜ作れないのか」(ほとんどは
+        # digits/ への書き込み権限) が画面から分からなかった。
+        msg = f"{created} 件生成しましたが、{len(errors)} 件失敗しました。{errors[0]}"
         ok_flag = "0"
     elif created == 0 and skipped > 0:
         msg = (

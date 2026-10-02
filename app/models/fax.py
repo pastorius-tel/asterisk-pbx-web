@@ -42,8 +42,8 @@ class FaxConfig(Base):
     minrate: Mapped[int] = mapped_column(Integer, default=4800)
     """FAX 伝送の最小ボーレート (bps)。Asterisk 既定値は 4800。
        選択可能値: 2400 / 4800 / 7200 / 9600 / 12000 / 14400。
-       回線品質が悪くネゴシエーションが不安定な場合、9600 等に下げる
-       (かつ maxrate も同程度以下に) と改善することがある。"""
+       maxrate より大きい値が入っていた場合は maxrate まで引き下げて
+       使う (res_fax.c が minrate > maxrate を即エラーにするため)。"""
 
     cng_detect_wait_seconds: Mapped[int] = mapped_column(Integer, default=2)
     """音声通話とFAXを共用する番号 (リンググループ) で、応答後すぐに
@@ -56,8 +56,35 @@ class FaxConfig(Base):
 
     maxrate: Mapped[int] = mapped_column(Integer, default=14400)
     """FAX 伝送の最大ボーレート (bps)。Asterisk 既定値は 14400。
-       T.38 が使えず音声 (G.711) パススルーのみの回線では、
-       9600 や 7200 に下げた方が安定するケースが多い。"""
+
+       T.38 が使えず音声 (G.711) パススルーのみの回線では、9600 や
+       4800 に下げた方が安定するケースが多い。
+
+       【重要】この値は FAXOPT(maxrate) として設定するだけでは効かない。
+       Asterisk 22 の res_fax_spandsp.c は minrate/maxrate を spandsp の
+       T.30 ステートマシンへ渡しておらず、res_fax.c 側で modems 設定との
+       整合性を検査するためだけに使われている。実際に速度を制限するのは
+       res_fax.conf の modems= なので、本ツールはこの値から使用モデムを
+       導出して res_fax.conf を生成している
+       (asterisk_config._fax_rates / render_res_fax_conf)。
+         14400 / 12000 → modems=v17,v27,v29
+          9600 /  7200 → modems=v27,v29
+          4800 /  2400 → modems=v27"""
+
+    t38_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    """T.38 (FAX をデジタルのまま送る方式) を使うか。
+
+       有効にすると、Asterisk は FAX の通信が始まるときに相手へ
+       「T.38 に切り替えよう」と提案する (SIP の再 INVITE)。
+       相手が断った場合は音声 (G.711) モードへ自動で切り替わる。
+
+       ひかり電話の HGW/OG は T.38 に対応しておらず、ログに
+         receivefax_t38_init: channel '...' refused to negotiate T.38
+       が毎回出る。断られるだけなら無害だが、機種によっては
+       この切り替え提案のあと音声が流れなくなり、
+       **FAXSTATUS=FAILED / PAGES=0 で受信できない**ことがある。
+       その場合はこれを無効にすると、最初から音声モードで受信する
+       ようになり安定する (T.38 の提案自体を行わなくなる)。"""
 
     ecm_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     """ECM (エラー訂正モード) を使うか。

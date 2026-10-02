@@ -14,13 +14,16 @@ Open JTalk を使って日本語テキストから音声ファイルを生成し
 
 from __future__ import annotations
 
+import errno
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 from app.config import settings
+from app.services.permissions import describe_permission_error as _perm_hint
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,51 @@ _VOICE_CANDIDATES = [
     "/usr/share/hts-voice/mei/mei_normal.htsvoice",
 ]
 
-HTS_VOICE_DIR = Path("/usr/share/hts-voice")
+def _exists(path: Path) -> bool:
+    """存在するかを調べる。調べられない場合は False。
+
+    親ディレクトリに検索 (x) 権限が無いと Path.exists() は
+    PermissionError を投げる。画面表示の途中でこれが起きると
+    ページ全体が開かなくなるため、権限を判定する箇所以外では
+    常にこの関数を通す。
+    """
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# 音響モデル (.htsvoice) の置き場所
+#
+# /usr/share/hts-voice は apt で入る標準の声の置き場だが root 所有のため、
+# サービス実行ユーザー (既定 asterisk) で動く本ツールからは書き込めない。
+# 以前はここだけを使っていたので、画面からの声パック導入と .htsvoice
+# アップロードは必ず PermissionError で失敗していた。
+#
+# そこで 2 箇所を併用する:
+#   HTS_VOICE_SYSTEM_DIR … apt 等が入れた標準の声 (読み取り専用で参照)
+#   hts_voice_dir (設定)  … 本ツールが追加する声 (読み書き)
+# 一覧表示は両方を走査し、追加・削除は書き込み可能な側だけを対象にする。
+# ---------------------------------------------------------------------------
+HTS_VOICE_SYSTEM_DIR = Path("/usr/share/hts-voice")
+
+# 後方互換: 以前のコード・ドキュメントが参照していた名前。
+HTS_VOICE_DIR = HTS_VOICE_SYSTEM_DIR
+
+
+def hts_voice_write_dir() -> Path:
+    """本ツールが音響モデルを追加する (書き込み可能な) ディレクトリ。"""
+    return settings.hts_voice_dir
+
+
+def _hts_voice_dirs() -> list[Path]:
+    """音響モデルを探索するディレクトリ (重複を除いた順序付きリスト)。"""
+    dirs: list[Path] = []
+    for d in (HTS_VOICE_SYSTEM_DIR, hts_voice_write_dir()):
+        if d not in dirs:
+            dirs.append(d)
+    return dirs
 
 # 音響モデル (声) の表示名。ファイル名からの推測に使う。
 # ここに無いモデルも、.htsvoice ファイルさえあれば自動的に検出される。
@@ -62,18 +109,30 @@ _VOICE_LABELS = {
 def list_voices() -> list[dict[str, str]]:
     """インストール済みの音響モデル (.htsvoice) を一覧する。
 
-    /usr/share/hts-voice/ 配下を再帰的に探し、見つかったモデルを
+    標準の置き場 (/usr/share/hts-voice) と本ツールの置き場の両方を
+    再帰的に探し、見つかったモデルを
     {"value": <絶対パス>, "label": <表示名>, "key": <ファイル名(拡張子なし)>}
     の形で返す。パッケージ追加や手動配置で増えたモデルも自動的に現れる。
+
+    同じキーが両方にある場合は、後から走査する本ツール側 (利用者が
+    自分で入れたもの) を優先する。
     """
-    if not HTS_VOICE_DIR.exists():
-        return []
-    voices = []
-    for p in sorted(HTS_VOICE_DIR.rglob("*.htsvoice")):
-        key = p.stem
-        label = _VOICE_LABELS.get(key, key)
-        voices.append({"value": str(p), "label": label, "key": key})
-    return voices
+    found: dict[str, dict[str, str]] = {}
+    for base in _hts_voice_dirs():
+        if not _exists(base):
+            continue
+        try:
+            paths = sorted(base.rglob("*.htsvoice"))
+        except OSError:
+            continue
+        for p in paths:
+            key = p.stem
+            found[key] = {
+                "value": str(p),
+                "label": _VOICE_LABELS.get(key, key),
+                "key": key,
+            }
+    return [found[k] for k in sorted(found)]
 
 
 def resolve_voice(voice: str | None) -> str | None:
@@ -81,18 +140,31 @@ def resolve_voice(voice: str | None) -> str | None:
     指定が無い/見つからない場合は既定のモデルにフォールバックする。"""
     if voice:
         p = Path(voice)
-        if p.exists() and p.suffix == ".htsvoice":
+        if _exists(p) and p.suffix == ".htsvoice":
             return str(p)
         # キー名で指定された場合
         for v in list_voices():
             if v["key"] == voice:
                 return v["value"]
-    return _find_first_existing(_VOICE_CANDIDATES)
+    return _default_voice()
+
+
+def _default_voice() -> str | None:
+    """既定の音響モデル。標準の声が無ければ、導入済みの何かを使う。
+
+    標準の声 (apt の nitech / mei) が入っていなくても、画面から追加した
+    声だけで TTS が使えるようにするため、最後に list_voices() へ回す。
+    """
+    found = _find_first_existing(_VOICE_CANDIDATES)
+    if found:
+        return found
+    voices = list_voices()
+    return voices[0]["value"] if voices else None
 
 
 def _find_first_existing(paths: list[str]) -> str | None:
     for p in paths:
-        if Path(p).exists():
+        if _exists(Path(p)):
             return p
     return None
 
@@ -103,7 +175,7 @@ def tts_available() -> tuple[bool, str]:
         return (False, "open_jtalk コマンドが見つかりません")
     if _find_first_existing(_DIC_CANDIDATES) is None:
         return (False, "Open JTalk の辞書 (naist-jdic) が見つかりません")
-    if _find_first_existing(_VOICE_CANDIDATES) is None:
+    if _default_voice() is None:
         return (False, "Open JTalk の音響モデル (.htsvoice) が見つかりません")
     if shutil.which(settings.ffmpeg_path) is None:
         return (False, f"{settings.ffmpeg_path} が見つかりません")
@@ -286,7 +358,14 @@ def datetime_sounds_status() -> tuple[int, int, list[str]]:
     digits_dir = _japanese_digits_dir()
     missing = []
     for name in specs:
-        if not (digits_dir / f"{name}.wav").exists():
+        # digits/ に検索権限が無いと exists() 自体が PermissionError を
+        # 投げる。この関数はシステム画面・TTS 画面の表示で必ず呼ばれる
+        # ため、ここで落ちると画面そのものが開かなくなる。
+        try:
+            found = (digits_dir / f"{name}.wav").exists()
+        except OSError:
+            found = False
+        if not found:
             missing.append(name)
     return (len(specs) - len(missing), len(specs), missing)
 
@@ -318,14 +397,33 @@ def generate_datetime_sounds(
     """
     specs = datetime_sound_specs(include_numbers=include_numbers)
     digits_dir = _japanese_digits_dir()
-    digits_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        digits_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return (0, 0, [_perm_hint(digits_dir, e)])
+
+    # 書き込めない場合は、1 件ずつ失敗を積むのではなく最初にまとめて
+    # 知らせる。target.exists() 自体も (検索権限が無いと) 例外を投げる
+    # ため、ここで止めないと 500 になって原因が分からなかった。
+    if not os.access(digits_dir, os.W_OK | os.X_OK):
+        return (
+            0, 0,
+            [_perm_hint(
+                digits_dir,
+                PermissionError(errno.EACCES, "Permission denied", str(digits_dir)),
+            )],
+        )
 
     created = 0
     skipped = 0
     errors: list[str] = []
     for name, text in specs.items():
         target = digits_dir / f"{name}.wav"
-        if target.exists() and not overwrite:
+        try:
+            already = target.exists()
+        except OSError:
+            already = False
+        if already and not overwrite:
             skipped += 1
             continue
         try:
@@ -343,19 +441,32 @@ def generate_datetime_sounds(
 
 # Web 画面から導入できる声パックの定義。
 # Ubuntu の標準リポジトリには男性の声しか無いため、配布元から直接
-# ダウンロードして /usr/share/hts-voice/ に配置する。
+# ダウンロードして hts_voice_dir へ配置する (本ツールは同梱しない)。
+#
+# 【帰属表示について】
+# どちらも Creative Commons 表示 (CC BY) 系のライセンスで、利用には
+# 著作権者・ライセンス名・ライセンスへのリンクの表示が必要になる。
+# 以前は "icn-lab / htsvoice-tohoku-f01" のような短い記載しか出して
+# いなかったが、それでは CC BY の要件を満たさないため、権利者名・
+# ライセンス名・リンクを揃えて画面と THIRD_PARTY_NOTICES.md に出す。
 VOICE_PACKS: dict[str, dict[str, str]] = {
     "tohoku-f01": {
         "label": "東北 f01 (女性)",
         "description": "通常・明るめ・落ち着き・強めの4種類。軽量ですぐ導入できます。",
         "size_hint": "約 3MB",
-        "credit": "icn-lab / htsvoice-tohoku-f01",
+        "credit": "東北大学 Intelligent Communication Network (伊藤・能勢) 研究室",
+        "license": "CC BY 4.0",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/deed.ja",
+        "source_url": "https://github.com/icn-lab/htsvoice-tohoku-f01",
     },
     "mei": {
         "label": "メイ (女性)",
         "description": "通常・明るめ・落ち着き・強め・控えめの5種類。名古屋工業大学 MMDAgent の音声です。",
         "size_hint": "約 100MB (ダウンロードに数分かかります)",
         "credit": "名古屋工業大学 MMDAgent プロジェクト",
+        "license": "CC BY (音響モデル)",
+        "license_url": "https://creativecommons.org/licenses/by/3.0/deed.ja",
+        "source_url": "https://www.mmdagent.jp/",
     },
 }
 
@@ -367,13 +478,22 @@ _MMDAGENT_URL = (
 )
 
 
+_PACK_MARKERS: dict[str, str] = {
+    "tohoku-f01": "tohoku-f01/tohoku-f01-neutral.htsvoice",
+    "mei": "mei/mei_normal.htsvoice",
+}
+
+
 def voice_pack_installed(pack: str) -> bool:
-    """指定した声パックが既に導入済みかを返す。"""
-    if pack == "tohoku-f01":
-        return (HTS_VOICE_DIR / "tohoku-f01" / "tohoku-f01-neutral.htsvoice").exists()
-    if pack == "mei":
-        return (HTS_VOICE_DIR / "mei" / "mei_normal.htsvoice").exists()
-    return False
+    """指定した声パックが既に導入済みかを返す。
+
+    標準の置き場と本ツールの置き場の両方を見る (apt で入れた場合と
+    画面から入れた場合のどちらでも「導入済み」と判定する)。
+    """
+    marker = _PACK_MARKERS.get(pack)
+    if marker is None:
+        return False
+    return any(_exists(base / marker) for base in _hts_voice_dirs())
 
 
 def install_voice_pack(pack: str) -> tuple[bool, str]:
@@ -390,17 +510,18 @@ def install_voice_pack(pack: str) -> tuple[bool, str]:
     if voice_pack_installed(pack):
         return (True, f"{VOICE_PACKS[pack]['label']} は既に導入済みです。")
 
+    root = hts_voice_write_dir()
     try:
-        HTS_VOICE_DIR.mkdir(parents=True, exist_ok=True)
+        root.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        return (False, f"{HTS_VOICE_DIR} を作成できません (権限を確認してください): {e}")
+        return (False, _perm_hint(root, e))
 
     if pack == "tohoku-f01":
-        target_dir = HTS_VOICE_DIR / "tohoku-f01"
+        target_dir = root / "tohoku-f01"
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            return (False, f"保存先を作成できません: {e}")
+            return (False, _perm_hint(target_dir, e))
         got = 0
         for v in _TOHOKU_VARIANTS:
             url = f"{_TOHOKU_BASE}/tohoku-f01-{v}.htsvoice"
@@ -432,11 +553,13 @@ def install_voice_pack(pack: str) -> tuple[bool, str]:
                 ]
                 if not members:
                     return (False, "アーカイブ内に音声ファイルが見つかりませんでした。")
-                target_dir = HTS_VOICE_DIR / "mei"
+                target_dir = root / "mei"
                 target_dir.mkdir(parents=True, exist_ok=True)
                 for m in members:
                     data = zf.read(m)
                     (target_dir / Path(m).name).write_bytes(data)
+        except PermissionError as e:
+            return (False, _perm_hint(root / "mei", e))
         except (zipfile.BadZipFile, OSError) as e:
             return (False, f"展開に失敗しました: {e}")
         return (True, f"メイ (女性) を導入しました ({len(members)} 種類)。")
@@ -465,12 +588,12 @@ def save_uploaded_voice(filename: str, data: bytes) -> tuple[bool, str]:
     if not data.lstrip()[:8].startswith(b"[GLOBAL]"):
         return (False, "Open JTalk の音響モデル (.htsvoice) ではないようです。")
 
-    target_dir = HTS_VOICE_DIR / CUSTOM_VOICE_DIR_NAME
+    target_dir = hts_voice_write_dir() / CUSTOM_VOICE_DIR_NAME
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         (target_dir / safe).write_bytes(data)
     except OSError as e:
-        return (False, f"保存に失敗しました (権限を確認してください): {e}")
+        return (False, _perm_hint(target_dir, e))
     return (True, f"音響モデル「{Path(safe).stem}」を追加しました。")
 
 
@@ -480,8 +603,8 @@ def delete_voice(key: str) -> tuple[bool, str]:
     安全のため custom/ 配下のもののみ削除できる (パッケージや配布元から
     導入した標準の声は消せない)。
     """
-    target_dir = HTS_VOICE_DIR / CUSTOM_VOICE_DIR_NAME
-    if not target_dir.exists():
+    target_dir = hts_voice_write_dir() / CUSTOM_VOICE_DIR_NAME
+    if not _exists(target_dir):
         return (False, "削除できる音響モデルがありません。")
     for p in target_dir.glob("*.htsvoice"):
         if p.stem == key:
@@ -495,4 +618,4 @@ def delete_voice(key: str) -> tuple[bool, str]:
 
 def is_custom_voice(key: str) -> bool:
     """アップロードで追加した (＝削除可能な) 音響モデルかを返す。"""
-    return (HTS_VOICE_DIR / CUSTOM_VOICE_DIR_NAME / f"{key}.htsvoice").exists()
+    return _exists(hts_voice_write_dir() / CUSTOM_VOICE_DIR_NAME / f"{key}.htsvoice")

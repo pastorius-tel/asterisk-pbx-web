@@ -223,7 +223,13 @@ async def reload_asterisk_safely() -> dict[str, str]:
       app_voicemail.so   ... voicemail.conf
       res_musiconhold.so ... musiconhold.conf
       res_parking.so     ... res_parking.conf
+      res_fax.so         ... res_fax.conf
       features           ... features.conf (CLI 経由)
+      logger             ... logger.conf   (CLI 経由 / 本体機能)
+
+    res_fax.so は FAX 機能を使っていない環境ではロードされていない
+    ことがあるが、その場合は "no such module" が返り skip 扱いに
+    なるだけなので、無条件に対象へ入れておいて問題ない。
     """
     targets: list[tuple[str, str]] = [
         ("pjsip", "res_pjsip.so"),
@@ -232,6 +238,10 @@ async def reload_asterisk_safely() -> dict[str, str]:
         ("voicemail", "app_voicemail.so"),
         ("musiconhold", "res_musiconhold.so"),
         ("parking", "res_parking.so"),
+        # res_fax.conf (FAX の modems / minrate / maxrate / ecm) は
+        # res_fax.so の reload でしか読み直されない。これが無いと
+        # 画面で通信速度を変えても Asterisk 再起動まで反映されない。
+        ("fax", "res_fax.so"),
         # Asterisk 22 の features モジュールは AMI Action: Reload に対して
         # ".so" 付きの名前を渡すと "An unknown error occurred" を返すため、
         # 拡張子なしの "features" で指定する。
@@ -260,6 +270,13 @@ async def reload_asterisk_safely() -> dict[str, str]:
                     results[label] = "skip (モジュールが reload 非対応)"
                 else:
                     results[label] = f"NG: {r.message[:200]}"
+
+            # logger.conf だけは「モジュール」ではなく Asterisk 本体の
+            # 機能なので module reload では読み直せない。CLI の
+            # `logger reload` を使う。これを忘れると、logger.conf に
+            # 'fax' レベルを足しても再起動まで FAX のトレースが出ない。
+            rl = await ami.command("logger reload")
+            results["logger"] = "OK" if rl.success else f"NG: {rl.message[:200]}"
     except Exception as exc:  # noqa: BLE001
         log.warning("AMI reload failed: %s", exc)
         results["error"] = str(exc)

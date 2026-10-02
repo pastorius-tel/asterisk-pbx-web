@@ -16,13 +16,16 @@ Asterisk が安定して扱えるのは:
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import settings
+from app.services.permissions import describe_permission_error
 
 log = logging.getLogger(__name__)
 
@@ -95,10 +98,18 @@ async def convert_to_asterisk_wav(
         return ConversionResult(
             success=False, output_path=None, duration_seconds=None,
             bytes_size=None,
-            log=(
-                f"出力ディレクトリを作成できません: {out_dir}\n"
-                f"  {e}\n"
-                f"対処: ASTERISK_SOUNDS_DIR への書き込み権限を確認してください。"
+            log=describe_permission_error(out_dir, e),
+        )
+
+    # ディレクトリが既にあって書き込めない場合は mkdir(exist_ok=True) が
+    # 成功してしまい、ffmpeg の "Permission denied" だけが残って原因が
+    # 分かりにくい。先に確かめて、所有者と対処コマンドを出す。
+    if not os.access(out_dir, os.W_OK | os.X_OK):
+        return ConversionResult(
+            success=False, output_path=None, duration_seconds=None,
+            bytes_size=None,
+            log=describe_permission_error(
+                out_dir, PermissionError(errno.EACCES, "Permission denied", str(out_dir))
             ),
         )
 

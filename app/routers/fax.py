@@ -30,6 +30,7 @@ from app.hooks import verify_hook
 from app.models import FaxConfig, FaxLog, Trunk
 from app.services import fax_service
 from app.services.ami import AmiClient
+from app.services.permissions import describe_permission_error
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +112,7 @@ async def fax_config_save(
     minrate: int = Form(4800),
     maxrate: int = Form(14400),
     ecm_enabled: str = Form(""),
+    t38_enabled: str = Form(""),
     cng_detect_wait_seconds: int = Form(2),
     deliver_mail: str | None = Form(None),
     deliver_smb: str | None = Form(None),
@@ -132,6 +134,7 @@ async def fax_config_save(
     cfg.minrate = minrate if minrate in _valid_rates else 4800
     cfg.maxrate = maxrate if maxrate in _valid_rates else 14400
     cfg.ecm_enabled = ecm_enabled == "on"
+    cfg.t38_enabled = t38_enabled == "on"
     # 0〜10秒の範囲に丸める (極端な値による事故防止)
     cfg.cng_detect_wait_seconds = max(0, min(10, cng_detect_wait_seconds))
     cfg.deliver_mail = deliver_mail is not None
@@ -314,11 +317,15 @@ async def fax_send(
     try:
         work.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        return await _send_error(request, db, cfg, f"作業ディレクトリ作成失敗: {e}")
+        return await _send_error(request, db, cfg, describe_permission_error(work, e))
 
     ts = datetime.now()
     src_pdf = work / f"src_{ts.strftime('%Y%m%d_%H%M%S')}.pdf"
-    src_pdf.write_bytes(await file.read())
+    try:
+        src_pdf.write_bytes(await file.read())
+    except OSError as e:
+        # スプールに書けないと 500 になり原因が分からなかった。
+        return await _send_error(request, db, cfg, describe_permission_error(src_pdf, e))
 
     fxlog = FaxLog(
         direction="send",
@@ -444,6 +451,10 @@ async def fax_hook_received(
     src: str = "",
     status: str = "",  # noqa: A002
     pages: str = "",
+    error: str = "",
+    detail: str = "",
+    mode: str = "",
+    remote: str = "",
     uniqueid: str = "",
 ) -> dict:
     """Asterisk の ReceiveFAX 完了後に curl で叩かれる内部フック。
@@ -473,7 +484,22 @@ async def fax_hook_received(
     # FAXSTATUS が SUCCESS でなければ失敗記録だけ
     if status.upper() != "SUCCESS":
         fxlog.status = "failed"
-        fxlog.error_detail = f"Asterisk FAXSTATUS={status}"
+        # 失敗理由を残す。Asterisk の FAXERROR / FAXSTATUSSTRING には
+        # spandsp の T.30 完了コード ("Unexpected message received" や
+        # "Timed out waiting for the first message" 等) が入るため、
+        # これが無いと「FAILED としか分からない」状態になる。
+        parts = [f"FAXSTATUS={status}"]
+        if error:
+            parts.append(f"FAXERROR={error}")
+        if detail and detail != error:
+            parts.append(detail)
+        if mode:
+            # audio / T38。T.38 を無効にした設定が効いているかの確認用。
+            parts.append(f"モード={mode}")
+        if remote:
+            parts.append(f"相手局={remote}")
+        fxlog.error_detail = " / ".join(parts)[:1000]
+        log.warning("FAX 受信失敗: %s", fxlog.error_detail)
         await db.commit()
         return {"ok": False, "reason": f"FAXSTATUS={status}"}
 

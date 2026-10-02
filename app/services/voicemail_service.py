@@ -100,7 +100,10 @@ def _load_one(extension: str, folder: str, msg_num: str) -> VoicemailMessage | N
     """
     dir_ = _mailbox_dir(extension) / folder
     txt_path = dir_ / f"msg{msg_num}.txt"
-    if not txt_path.exists():
+    try:
+        if not txt_path.exists():
+            return None
+    except OSError:
         return None
     meta = _parse_meta(txt_path)
 
@@ -145,9 +148,17 @@ def list_messages(extension: str) -> list[VoicemailMessage]:
     base = _mailbox_dir(extension)
     for folder in FOLDERS:
         dir_ = base / folder
-        if not dir_.is_dir():
+        # スプールに読み取り権限が無いと is_dir / glob が
+        # PermissionError を投げる。この関数はダッシュボードと留守番電話
+        # 画面の表示で呼ばれるため、落ちると画面が開かなくなる。
+        try:
+            if not dir_.is_dir():
+                continue
+            txt_paths = sorted(dir_.glob("msg*.txt"))
+        except OSError as e:
+            log.warning("留守番電話スプールを読めません (%s): %s", dir_, e)
             continue
-        for txt_path in sorted(dir_.glob("msg*.txt")):
+        for txt_path in txt_paths:
             msg_num = txt_path.stem.removeprefix("msg")
             msg = _load_one(extension, folder, msg_num)
             if msg is not None:

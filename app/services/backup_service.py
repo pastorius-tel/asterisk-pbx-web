@@ -18,7 +18,9 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
+import os
 import shutil
 import sqlite3
 import zipfile
@@ -27,6 +29,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import settings
+from app.services.permissions import describe_permission_error
 
 log = logging.getLogger(__name__)
 
@@ -55,12 +58,27 @@ class BackupInfo:
 
 
 def list_backups() -> list[BackupInfo]:
+    """保存済みバックアップの一覧。
+
+    この関数はシステム画面の表示で必ず呼ばれる。保存先に読み取り権限が
+    無いと glob / stat が PermissionError を投げ、画面自体が開かなく
+    なって権限の診断すら見られなくなるため、失敗は空リストとして扱う
+    (権限の問題は同じ画面の「ファイル権限の診断」が表示する)。
+    """
     d = settings.backup_dir
-    if not d.exists():
+    try:
+        if not d.exists():
+            return []
+        paths = sorted(d.glob("backup_*.zip"), reverse=True)
+    except OSError as e:
+        log.warning("バックアップ一覧を読めません (%s): %s", d, e)
         return []
     out = []
-    for p in sorted(d.glob("backup_*.zip"), reverse=True):
-        st = p.stat()
+    for p in paths:
+        try:
+            st = p.stat()
+        except OSError:
+            continue
         out.append(
             BackupInfo(
                 name=p.name,
@@ -96,7 +114,22 @@ async def create_backup() -> BackupInfo:
         raise RuntimeError(f"DB ファイルが見つかりません: {db_path}")
 
     backup_dir = settings.backup_dir
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise RuntimeError(describe_permission_error(backup_dir, e)) from e
+
+    # 保存先が既にあって書き込めない場合、SQLite の backup API は
+    # PermissionError ではなく sqlite3.OperationalError
+    # ("unable to open database file") を投げるため、素の 500 になって
+    # 原因が分からなかった。先に確かめて権限の説明に変える。
+    if not os.access(backup_dir, os.W_OK | os.X_OK):
+        raise RuntimeError(
+            describe_permission_error(
+                backup_dir,
+                PermissionError(errno.EACCES, "Permission denied", str(backup_dir)),
+            )
+        )
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     tmp_db = backup_dir / f".tmp_{ts}.db"

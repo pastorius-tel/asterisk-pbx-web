@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import logging
+import os
 import tempfile
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -22,6 +24,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import settings
+
+log = logging.getLogger(__name__)
 
 # SQLite では多重接続のため check_same_thread=False が必要。
 # また timeout を設けて、他処理が一時的に DB をロックしていても
@@ -97,10 +101,10 @@ async def init_db() -> None:
     # 一部のワーカーが起動に失敗する。ファイルロックで 1 プロセスずつ
     # 実行されるようにする (最初の 1 つがテーブルを作り、残りは
     # 作成済みの状態で通過する)。
-    lock_path = Path(tempfile.gettempdir()) / "asterisk-pbx-web-initdb.lock"
-    lock_file = open(lock_path, "w")  # noqa: SIM115  ロック保持のため明示的に閉じる
+    lock_file = _open_init_lock()
     try:
-        await asyncio.to_thread(fcntl.flock, lock_file, fcntl.LOCK_EX)
+        if lock_file is not None:
+            await asyncio.to_thread(fcntl.flock, lock_file, fcntl.LOCK_EX)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             # 既存テーブルにモデル定義の新カラムが無ければ ALTER TABLE で追加。
@@ -111,10 +115,65 @@ async def init_db() -> None:
             # 新しい INSERT を失敗させるものを取り除く。
             await conn.run_sync(_auto_drop_obsolete_columns)
     finally:
+        if lock_file is not None:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            finally:
+                lock_file.close()
+
+
+def _init_lock_dir() -> Path | None:
+    """ロックファイルを置くディレクトリ (SQLite なら DB と同じ場所)。"""
+    url = settings.database_url
+    marker = "sqlite+aiosqlite:///"
+    if not url.startswith(marker):
+        return None
+    raw = url[len(marker):]
+    if not raw or raw == ":memory:":
+        return None
+    try:
+        return Path(raw).resolve().parent
+    except OSError:
+        return None
+
+
+def _open_init_lock():
+    """create_all を直列化するためのロックファイルを開く。
+
+    以前は /tmp に固定名 (asterisk-pbx-web-initdb.lock) で置いていたが、
+    共有ディレクトリに固定名で置くと次の問題がある:
+
+      - 別ユーザーが作ったファイルは開けず PermissionError になる。
+        一度 sudo で起動した後にサービス (asterisk) で起動すると、
+        アプリ自体が起動しなくなる。
+      - 同名のシンボリックリンクを先に置かれると、open(..., "w") が
+        リンク先を切り詰めてしまう (/tmp のシンボリックリンク攻撃)。
+
+    そこで DB と同じディレクトリ (アプリの所有物) に置く。置けない
+    場合は uid 入りの名前で /tmp に退避し、それも駄目ならロックなしで
+    続行する (ワーカーが 1 つなら競合しないため、起動できない方が困る)。
+    """
+    candidates: list[Path] = []
+    db_dir = _init_lock_dir()
+    if db_dir is not None:
+        candidates.append(db_dir / ".initdb.lock")
+    candidates.append(
+        Path(tempfile.gettempdir()) / f"asterisk-pbx-web-initdb-{os.getuid()}.lock"
+    )
+    for path in candidates:
         try:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
-        finally:
-            lock_file.close()
+            # O_NOFOLLOW: 既存のシンボリックリンクを辿らない
+            fd = os.open(
+                path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600
+            )
+            return os.fdopen(fd, "r+")
+        except OSError as e:
+            log.debug("初期化ロックを %s に作れません: %s", path, e)
+    log.warning(
+        "初期化ロックを作成できませんでした。ロックなしでテーブル作成を続行します "
+        "(gunicorn のワーカーが複数ある場合、起動時に競合する可能性があります)。"
+    )
+    return None
 
 
 # バージョンアップでモデルから削除された列。

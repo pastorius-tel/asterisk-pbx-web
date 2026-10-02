@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
@@ -22,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import AppSettings, Extension
-from app.services import backup_service, tts_service
+from app.services import backup_service, permissions, tts_service
 
 log = logging.getLogger(__name__)
 
@@ -111,12 +113,16 @@ def _check_ja_sounds() -> dict[str, object]:
 @router.get("/", response_class=HTMLResponse)
 async def system_home(
     request: Request, dt_error: str | None = None,
+    backup_error: str | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse:
     state = _check_ja_sounds()
     app_settings = await get_app_settings(db)
     asterisk_version = await _get_asterisk_version()
     _dt_done, _dt_total, _ = tts_service.datetime_sounds_status()
+    # ファイル権限の自己診断。インストールや音源の登録が失敗する原因の
+    # ほとんどが権限なので、原因と対処コマンドをその場で出せるようにする。
+    perm_checks = permissions.check_all()
     ext_choices = [
         {"value": e.extension, "label": f"{e.extension} {e.display_name}"}
         for e in (
@@ -141,6 +147,11 @@ async def system_home(
             "dt_sounds_done": _dt_done,
             "dt_sounds_total": _dt_total,
             "dt_error": dt_error,
+            "backup_error": backup_error,
+            "perm_checks": perm_checks,
+            "perm_problems": [c for c in perm_checks if not c.ok],
+            "perm_user": permissions.current_user(),
+            "perm_group": permissions.current_group(),
             "ext_choices": ext_choices,
             "backups": backup_service.list_backups(),
             "asterisk_version": asterisk_version,
@@ -149,8 +160,23 @@ async def system_home(
 
 
 @router.post("/install-ja-sounds", response_class=StreamingResponse)
-async def install_ja_sounds(request: Request) -> StreamingResponse:
-    """日本語音声インストールスクリプトを実行し、出力をストリーミング表示。"""
+async def install_ja_sounds(request: Request, ack: str = Form("")) -> StreamingResponse:
+    """日本語音声インストールスクリプトを実行し、出力をストリーミング表示。
+
+    配布元 (takao-t/asterisk-sound-ja) にはライセンスの記載が無く、
+    既定では著作権者が全ての権利を留保している状態にあたる。利用者が
+    条件を読まずに実行してしまわないよう、画面のチェックを通した
+    リクエスト (ack=1) でのみ実行する。画面側だけの制御にすると、
+    ボタンの無効化を回避したときに素通りしてしまうため、ここでも見る。
+    """
+    if ack != "1":
+        async def need_ack():
+            yield (
+                "配布元のライセンス条件に関する確認にチェックを入れてから"
+                "実行してください。\n"
+            ).encode()
+        return StreamingResponse(need_ack(), media_type="text/plain; charset=utf-8")
+
     script_path = (
         Path(__file__).resolve().parent.parent.parent
         / "scripts" / "install_japanese_sounds.sh"
@@ -295,10 +321,18 @@ async def change_internal_ring_seconds(
 
 @router.post("/backups/create", response_class=HTMLResponse)
 async def create_backup_endpoint(request: Request) -> RedirectResponse:
+    """バックアップを作成する。
+
+    失敗理由 (ほとんどは保存先の権限不足) は以前ログにしか出ておらず、
+    画面上は「何も起きない」ように見えていた。理由を画面へ返す。
+    """
     try:
         await backup_service.create_backup()
-    except RuntimeError as exc:
+    except (RuntimeError, OSError, sqlite3.Error) as exc:
         log.warning("backup creation failed: %s", exc)
+        return RedirectResponse(
+            f"/system/?backup_error={quote(str(exc))}#backups", status_code=303
+        )
     return RedirectResponse("/system/#backups", status_code=303)
 
 

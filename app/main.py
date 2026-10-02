@@ -8,7 +8,8 @@ import tomllib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -225,6 +226,30 @@ app.include_router(schedules.router)
 app.include_router(holidays.router)
 app.include_router(call_logs.router)
 app.include_router(phone_book.router)
+
+
+@app.exception_handler(PermissionError)
+async def permission_error_handler(
+    request: Request, exc: PermissionError
+) -> HTMLResponse:
+    """権限エラーを素の 500 ではなく、原因と対処が分かる画面で返す。
+
+    本ツールは Asterisk の conf・音源・スプールを直接書き換えるため、
+    実行ユーザーの権限不足はもっとも起こりやすい障害でありながら、
+    画面には「Internal Server Error」しか出ず原因が分からなかった。
+    個別の機能側でも捕まえているが、取りこぼしをここで受け止める。
+    """
+    from app.services.permissions import describe_permission_error
+
+    target = getattr(exc, "filename", None) or "(パス不明)"
+    detail = describe_permission_error(target, exc)
+    log.warning("権限エラー: %s %s — %s", request.method, request.url.path, exc)
+    return HTMLResponse(
+        app.state.templates.get_template("error_permission.html").render(
+            request=request, title="権限エラー", detail=detail,
+        ),
+        status_code=500,
+    )
 
 
 @app.get("/healthz")

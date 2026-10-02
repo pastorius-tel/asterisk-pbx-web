@@ -11,6 +11,10 @@ FAX 受信完了 / 留守番電話の録音完了 / 発着信履歴の記録 は
     DB (app_settings) に保存する。gunicorn の複数ワーカーが同じ値を
     見る必要があるためプロセス内メモリには置かない。
   - .env に明示的な値があればそちらを優先する (既存導入との互換)。
+    ただし旧版の .env.example に載っていた見本の値 (公開されている文字列)
+    がそのまま残っている環境があるため、それは「未設定」として扱い、
+    自動生成した値に差し替える。見本のままだと、文字列を知っている人は
+    誰でもフックを叩けてしまう。
   - 比較は hmac.compare_digest で行う (文字列 != では、先頭から何文字
     一致したかが応答時間の差として漏れるため)。
   - 送信元 IP も既定で 127.0.0.1 / ::1 に限定する。Asterisk と本ツールを
@@ -39,11 +43,37 @@ _HOOKS: dict[str, tuple[str, str]] = {
     "calllog": ("calllog_hook_token", "calllog_hook_token"),
 }
 
+# 旧版の .env.example に見本として載せていた値。これをそのままコピーして
+# 運用している環境があるため、設定されていても「未設定」と同じ扱いにして
+# 自動生成したトークンへ差し替える (公開済みの文字列なので意味がない)。
+# 比較は小文字化して行う。
+_PLACEHOLDER_TOKENS: frozenset[str] = frozenset(
+    {
+        "please-change-this-fax-hook-token",
+        "please-change-this-voicemail-hook-token",
+        "please-change-this-calllog-hook-token",
+        "please-change-this",
+        "please-change-me",
+        "change-me",
+        "changeme",
+        "your-token-here",
+        "token",
+        "secret",
+    }
+)
+
 
 async def get_hook_token(db: AsyncSession, kind: str) -> str:
     """フック用トークンを取得する。無ければ生成して保存する。"""
     env_attr, col = _HOOKS[kind]
     env_value = (getattr(settings, env_attr, "") or "").strip()
+    if env_value and env_value.lower() in _PLACEHOLDER_TOKENS:
+        log.warning(
+            ".env の %s が見本の値のままなので無視し、自動生成した"
+            "トークンを使います。.env の該当行を削除してください。",
+            env_attr.upper(),
+        )
+        env_value = ""
     if env_value:
         return env_value
 

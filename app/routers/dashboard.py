@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
@@ -9,11 +10,15 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models import CallLog, Extension, FaxLog
 from app.services import voicemail_service
 from app.services.ami import reload_asterisk_safely
 from app.services.asterisk_config import write_all_configs
+from app.services.permissions import describe_permission_error
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -80,8 +85,27 @@ async def dashboard(request: Request, db: AsyncSession = Depends(get_db)) -> HTM
 
 @router.post("/apply", response_class=HTMLResponse)
 async def apply_config(request: Request, db: AsyncSession = Depends(get_db)) -> HTMLResponse:
-    """設定ファイルを書き出して Asterisk をリロード。"""
-    written = await write_all_configs(db)
+    """設定ファイルを書き出して Asterisk をリロード。
+
+    書き出し先 (既定 /etc/asterisk) に権限が無いと OSError で落ちる。
+    以前はそのまま 500 になり「何が悪いのか」が画面に出なかったため、
+    ここで捕まえて原因と対処コマンドを表示する。
+    """
+    try:
+        written = await write_all_configs(db)
+    except OSError as e:
+        log.warning("設定ファイルの書き出しに失敗: %s", e)
+        return request.app.state.templates.TemplateResponse(
+            request,
+            "partials/apply_result.html",
+            {
+                "written": [],
+                "reload_results": {},
+                "error": describe_permission_error(
+                    getattr(e, "filename", None) or settings.asterisk_config_dir, e
+                ),
+            },
+        )
     reload_results = await reload_asterisk_safely()
 
     return request.app.state.templates.TemplateResponse(

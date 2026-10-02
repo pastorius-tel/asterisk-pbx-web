@@ -11,7 +11,8 @@
   ├── pjsip.conf              (トランスポート + トランク + 内線)
   ├── extensions.conf         (ダイヤルプラン: 発信/着信/IVR/パーク等)
   ├── musiconhold.conf        (保留音クラス)
-  ├── parking.conf            (コールパーク)
+  ├── res_parking.conf        (コールパーク)
+  ├── res_fax.conf            (FAX の使用モデム / 速度 / ECM)
   ├── queues.conf             (キュー)
   └── voicemail.conf          (ボイスメール)
 
@@ -584,6 +585,24 @@ _HEADER = (
     "; 生成元: app/services/asterisk_config.py\n\n"
 )
 
+# 「このファイルは本ツールが生成した」ことを見分けるための目印。
+# 既存ファイルを上書きしてよいかの判定に使う (_is_generated_or_missing)。
+_AUTOGEN_MARK = "AUTO-GENERATED"
+
+
+def _is_generated_or_missing(path: Path) -> bool:
+    """path が存在しない、または本ツールが生成したものなら True。
+
+    手で書き換えた conf を黙って上書きしないための判定。
+    読めない場合は安全側に倒して False (触らない) を返す。
+    """
+    try:
+        if not path.exists():
+            return True
+        return _AUTOGEN_MARK in path.read_text(encoding="utf-8", errors="replace")[:512]
+    except OSError:
+        return False
+
 
 # ===========================================================================
 # pjsip.conf: トランスポート → トランク → 内線
@@ -664,17 +683,31 @@ qualify_frequency=60
 """
 
 
-def _render_pjsip_trunk(t: Trunk) -> str:
+def _render_pjsip_trunk(t: Trunk, t38_enabled: bool = True) -> str:
     """1 トランク分の pjsip セクション。
 
     ひかり電話オフィスA (HGW/OG 経由) は専用処理に分岐する。
     """
     if t.trunk_type in ("hikari_office_a_hgw", "hikari_office_a_og"):
-        return _render_pjsip_hikari(t)
+        return _render_pjsip_hikari(t, t38_enabled)
 
     codecs = t.codec_primary
     if t.codec_secondary:
         codecs = f"{t.codec_primary},{t.codec_secondary}"
+
+    # T.38 (FAX をデジタルのまま送る方式) の設定行。
+    # ひかり電話の HGW/OG は T.38 に対応しておらず毎回断られる。
+    # 画面で無効にした場合は、そもそも T.38 対応として申告しない
+    # (= Asterisk が切り替え提案を送らない) ようにする。
+    if t38_enabled:
+        t38_lines = (
+            "t38_udptl=yes\n"
+            "t38_udptl_ec=redundancy\n"
+            "t38_udptl_nat=no\n"
+            "t38_udptl_maxdatagram=400\n"
+        )
+    else:
+        t38_lines = "t38_udptl=no\n"
 
     blocks: list[str] = [f";=== トランク {_text(t.name)} ({_text(t.host)}:{t.port})=="]
 
@@ -699,11 +732,7 @@ direct_media=no
 dtmf_mode={t.dtmf_mode}
 fax_detect=yes
 fax_detect_timeout=20
-t38_udptl=yes
-t38_udptl_ec=redundancy
-t38_udptl_nat=no
-t38_udptl_maxdatagram=400
-{extra_lines}"""
+{t38_lines}{extra_lines}"""
     )
 
     if t.trunk_type == "register" and t.username and t.secret:
@@ -738,7 +767,7 @@ retry_interval=60
     return "\n".join(blocks)
 
 
-def _render_pjsip_hikari(t: Trunk) -> str:
+def _render_pjsip_hikari(t: Trunk, t38_enabled: bool = True) -> str:
     """ひかり電話オフィスA (HGW / OG 経由) 専用の pjsip セクション。
 
     生成方針 (voip-info.jp / 妄想エンジン氏 / NTT 取扱説明書を参照):
@@ -796,6 +825,18 @@ password={auth_pass}
 """
         )
 
+    # T.38 の設定行 (ひかり電話の HGW/OG は T.38 非対応。
+    #  画面で無効にした場合は T.38 対応として申告しない)
+    if t38_enabled:
+        t38_lines = (
+            "t38_udptl=yes\n"
+            "t38_udptl_ec=redundancy\n"
+            "t38_udptl_nat=no\n"
+            "t38_udptl_maxdatagram=400\n"
+        )
+    else:
+        t38_lines = "t38_udptl=no\n"
+
     #--- aor---
     blocks.append(
         f"""[{t.name}]
@@ -828,11 +869,7 @@ from_user={hgw_ext}
 from_domain={t.host}
 fax_detect=yes
 fax_detect_timeout=20
-t38_udptl=yes
-t38_udptl_ec=redundancy
-t38_udptl_nat=no
-t38_udptl_maxdatagram=400
-"""
+{t38_lines}"""
     )
 
     #--- identify (HGW からの着信を当該 endpoint に紐付け)---
@@ -860,6 +897,12 @@ async def render_pjsip_conf(db: AsyncSession) -> str:
     trunks = list((await db.scalars(select(Trunk).where(Trunk.enabled.is_(True)))).all())
     system_language = await _get_system_language(db)
     sip_port = await _get_sip_port(db)
+    # FAX の T.38 設定 (未設定時は従来どおり有効)
+    _fax_cfg = (await db.scalars(select(FaxConfig))).first()
+    # None (カラム追加直後で値が入っていない等) は「有効」とみなす。
+    # モデルの既定値と揃え、pjsip.conf と extensions.conf の判断が
+    # 食い違わないようにする。
+    t38_enabled = True if _fax_cfg is None else (_fax_cfg.t38_enabled is not False)
 
     out = io.StringIO()
     out.write(_HEADER)
@@ -892,7 +935,7 @@ async def render_pjsip_conf(db: AsyncSession) -> str:
     out.write(_render_pjsip_transports(sip_port))
 
     for t in trunks:
-        out.write(_render_pjsip_trunk(t))
+        out.write(_render_pjsip_trunk(t, t38_enabled))
         out.write("\n")
 
     for e in extensions:
@@ -1761,6 +1804,88 @@ def _ivr_fallback_lines(ivr: Ivr, vm_only: set[str] | None = None,
     return " same => n,Hangup()\n"
 
 
+#-------------------------------------------------------------------
+# FAX の通信速度
+#-------------------------------------------------------------------
+# 【重要】FAXOPT(minrate) / FAXOPT(maxrate) だけでは速度は変わらない。
+#
+# Asterisk 22 の res_fax_spandsp.c は、この 2 つの値を spandsp の T.30
+# ステートマシンへ一切渡していない (res_fax.c の check_modem_rate() で
+# 「modems 設定と矛盾していないか」を検査するためだけに使われる)。
+# 実際に使用モデムを制限しているのは res_fax.conf の modems= で、
+# これが未設定だと Asterisk の既定値 v17,v27,v29 のまま、つまり
+# V.17 の 14400bps までフルに使おうとする。
+#
+# T.38 が使えず音声 (G.711) パススルーで受信している回線では、
+# V.17 14400bps はもっとも揺らぎに弱く、T.30 のメッセージが前後して
+#   FAXERROR=Unexpected message received / FAXSTATUS=FAILED / PAGES=0
+# で終わることがある。そのため画面の「最大ボーレート」から modems を
+# 導出し、res_fax.conf として書き出して本当に速度を抑える。
+#
+# 受け付けられるモデム名は v17 / v27 / v29 / v34 のみ
+# (res_fax.c の ast_fax_modem_str_to_bits)。"v27ter" と書くと
+#   ignoring invalid modem setting: 'v27ter'
+# の警告が出て無視されるので注意。
+_FAX_RATE_STEPS: tuple[int, ...] = (2400, 4800, 7200, 9600, 12000, 14400)
+
+
+def _fax_rates(fax: FaxConfig | None) -> tuple[int, int, str]:
+    """(minrate, maxrate, modems) を返す。
+
+    res_fax.c の check_modem_rate() は
+      2400/4800   → V.27ter か V.34 が必要
+      7200/9600   → V.17 か V.29 か V.34 が必要
+      12000/14400 → V.17 か V.34 が必要
+    を要求し、満たさないと ReceiveFAX/SendFAX が
+      'modems' setting is incompatible with 'minrate' setting
+    で即エラー終了する。ここで必ず整合する組み合わせだけを返す。
+    """
+    if fax is None:
+        return 4800, 14400, "v17,v27,v29"
+
+    maxrate = fax.maxrate if fax.maxrate in _FAX_RATE_STEPS else 14400
+    minrate = fax.minrate if fax.minrate in _FAX_RATE_STEPS else 4800
+    if minrate > maxrate:
+        minrate = maxrate
+
+    if maxrate >= 12000:
+        modems = "v17,v27,v29"      # 〜14400 (既定)
+    elif maxrate >= 7200:
+        modems = "v27,v29"          # 〜9600
+    else:
+        modems = "v27"              # 〜4800
+    return minrate, maxrate, modems
+
+
+async def render_res_fax_conf_from_db(db: AsyncSession) -> str:
+    """res_fax.conf を DB の FAX 設定から生成する。"""
+    return render_res_fax_conf((await db.scalars(select(FaxConfig))).first())
+
+
+def render_res_fax_conf(fax: FaxConfig | None) -> str:
+    """res_fax.conf — FAX コアの既定値。
+
+    ここで modems= を書くことが、音声 (G.711) モードでの FAX の
+    通信速度を実際に制限する唯一の方法 (上のコメント参照)。
+    """
+    minrate, maxrate, modems = _fax_rates(fax)
+    ecm = "yes" if (fax is None or fax.ecm_enabled) else "no"
+    return _HEADER + f"""[general]
+; 使用モデム。画面の「最大ボーレート」から導出している。
+;   v17,v27,v29 … 〜14400bps (Asterisk 既定)
+;   v27,v29     … 〜9600bps  (音声パススルー回線で安定しやすい)
+;   v27         … 〜4800bps  (もっとも確実だが遅い)
+modems={modems}
+minrate={minrate}
+maxrate={maxrate}
+ecm={ecm}
+; T.38 再ネゴシエーションの待ち時間 (ミリ秒)。既定 5000。
+t38timeout=5000
+; FAX の進捗を AMI イベントで流すか。本ツールは使わないので no。
+statusevents=no
+"""
+
+
 def _render_fax_context(fax: FaxConfig, hook_token: str) -> str:
     """FAX 受信用コンテキスト [fax-receive] を生成。
 
@@ -1778,24 +1903,83 @@ def _render_fax_context(fax: FaxConfig, hook_token: str) -> str:
     )
     out = io.StringIO()
     out.write("\n;=== FAX 受信 ===\n")
+    out.write(
+        "; 【重要】受信処理は必ず 'fax' という名前のエクステンションに置く。\n"
+        ";\n"
+        "; トランクの fax_detect=yes が CNG トーン (FAX の発信音) を検知した\n"
+        "; とき、chan_pjsip は次のように動く (chan_pjsip.c の\n"
+        "; chan_pjsip_cng_tone_detected):\n"
+        ";\n"
+        ";   ・いま実行中のエクステンション名が 'fax' なら → 何もしない\n"
+        ";     (音声フレームをそのまま通す)\n"
+        ";   ・そうでなければ → **そのときの音声フレームを破棄して**\n"
+        ";     同じコンテキストの 'fax' エクステンションへ飛ぼうとする\n"
+        ";\n"
+        "; 以前はここを 'exten => s' にしていたため、ReceiveFAX の実行中に\n"
+        "; CNG が検知されると、\n"
+        ";   NOTICE: FAX CNG detected on '...' but no fax extension in\n"
+        ";           'fax-receive'\n"
+        "; が出て音声フレームが 1 つ握りつぶされ、T.30 のネゴシエーションが\n"
+        "; 始まらないまま FAXSTATUS=FAILED / PAGES=0 で終わることがあった。\n"
+        ";\n"
+        "; 着信が IVR 等を経由する構成では、ここへ来る前に CNG 検知が\n"
+        "; 済んでいる (検知は 1 回で止まる) ため発生せず、FAX 番号へ直接\n"
+        "; 着信させる構成でのみ起きる、分かりにくい不具合だった。\n"
+        "; エクステンション名を 'fax' にすることで、Asterisk 側が用意して\n"
+        "; いる上記の除外条件に乗せて回避する。\n"
+    )
     out.write("[fax-receive]\n")
-    out.write("exten => s,1,NoOp(FAX receive start from ${CALLERID(num)})\n")
+    out.write("exten => fax,1,NoOp(FAX receive start from ${CALLERID(num)})\n")
     for _a in _calllog_dest_actions("fax", "", "FAX 受信"):
         out.write(f" same => n,{_a}\n")
     out.write(" same => n,Answer()\n")
     out.write(" same => n,Set(FAXFILE=" + spool + "/rx_${UNIQUEID}.tif)\n")
     out.write(f" same => n,Set(FAXOPT(ecm)={'yes' if fax.ecm_enabled else 'no'})\n")
     out.write(" same => n,Set(FAXOPT(headerinfo)=Received by Asterisk)\n")
-    out.write(f" same => n,Set(FAXOPT(minrate)={fax.minrate})\n")
-    out.write(f" same => n,Set(FAXOPT(maxrate)={fax.maxrate})\n")
-    if fax.station_id:
-        out.write(f" same => n,Set(FAXOPT(localstationid)={fax.station_id})\n")
-    # 'f' = T.38 対応チャネルでの音声フォールバックを許可。
-    # SendFAX 側と同じ理由 (t38_udptl=yes によりチャネルが T.38対応と
-    # みなされるため、相手が T.38 に応じない場合は音声モードへ
-    # フォールバックできるようにしておく)。
-    out.write(" same => n,ReceiveFAX(${FAXFILE},f)\n")
-    out.write(" same => n,NoOp(FAXSTATUS=${FAXSTATUS} PAGES=${FAXPAGES})\n")
+    # minrate/maxrate は res_fax.conf の modems= と矛盾しない値にする
+    # (矛盾すると ReceiveFAX が即エラーで終わる。_fax_rates のコメント参照)
+    _minrate, _maxrate, _ = _fax_rates(fax)
+    out.write(f" same => n,Set(FAXOPT(minrate)={_minrate})\n")
+    out.write(f" same => n,Set(FAXOPT(maxrate)={_maxrate})\n")
+    # 自局番号 (TSI/CSI) は T.30 の仕様上、数字・空白・'+' しか送れない。
+    # 画面に "059-384-4588" のようにハイフン付きで入力されることが
+    # あるため、ここで数字だけに正規化する (相手の FAX 機の表示や
+    # 通信記録に化けた値が出るのを防ぐ)。
+    _sid = _dial(fax.station_id)
+    if _sid:
+        out.write(f" same => n,Set(FAXOPT(localstationid)={_sid})\n")
+    # ReceiveFAX のオプション:
+    #   d … FAX デバッグ。spandsp の T.30 プロトコルトレース
+    #        (DIS/DCS/TCF/CFR 等の交換過程) を出力する。
+    #        送信側 (SendFAX) には以前から付けていたが、受信側に無いと
+    #        失敗しても「FAILED」以外に手がかりが残らないため付ける。
+    #        ※ 実際にトレースを見るには logger.conf の [logfiles] に
+    #           'fax' レベルを足す必要がある。res_fax.c の ast_fax_log() は
+    #           ast_logger_register_level("FAX") で登録した専用レベルへ
+    #           出力しており、console/full にこのレベルが無いと
+    #           どこにも出ない (Asterisk の分かりにくい仕様)。
+    #   f … T.38 を試し、相手が断ったら音声 (G.711) へフォールバック
+    #   F … T.38 を一切試さず、最初から音声で受信する
+    #
+    # ひかり電話の HGW/OG は T.38 に対応していないため毎回断られる。
+    # 断られるだけなら 'f' でも音声へ移行できるが、機種によっては
+    # 切り替え提案 (再 INVITE) のあと音声が届かなくなり、FAXSTATUS=FAILED /
+    # PAGES=0 で終わることがある。その場合は画面で T.38 を無効にすると
+    # 'F' になり、提案自体を行わなくなる。
+    _rx_opt = "df" if fax.t38_enabled is not False else "dF"
+    out.write(f" same => n,ReceiveFAX(${{FAXFILE}},{_rx_opt})\n")
+    # 失敗時の原因切り分けのため、状態だけでなく理由も残す。
+    #
+    # 変数名は FAXSTATUSSTR**ING** が正しい (res_fax.c の
+    # set_channel_variables)。FAXSTATUSSTR と書くと存在しない変数に
+    # なり、常に空文字が入って原因が分からないままになる。
+    # FAXMODE には実際に使われたモード (audio / T38) が入るので、
+    # T.38 を無効にした設定が効いているかの確認にも使える。
+    out.write(
+        " same => n,NoOp(FAXSTATUS=${FAXSTATUS} PAGES=${FAXPAGES} "
+        "ERROR=${FAXERROR} DETAIL=${FAXSTATUSSTRING} "
+        "MODE=${FAXMODE} RATE=${FAXBITRATE} REMOTE=${REMOTESTATIONID})\n"
+    )
     out.write(
         " same => n,System(curl -s -m 20 -G "
         f"'{hook_url}' "
@@ -1803,9 +1987,17 @@ def _render_fax_context(fax: FaxConfig, hook_token: str) -> str:
         "--data-urlencode 'src=${CALLERID(num)}' "
         "--data-urlencode 'status=${FAXSTATUS}' "
         "--data-urlencode 'pages=${FAXPAGES}' "
+        "--data-urlencode 'error=${FAXERROR}' "
+        "--data-urlencode 'detail=${FAXSTATUSSTRING}' "
+        "--data-urlencode 'mode=${FAXMODE}' "
+        "--data-urlencode 'remote=${REMOTESTATIONID}' "
         "--data-urlencode 'uniqueid=${UNIQUEID}')\n"
     )
-    out.write(" same => n,Hangup()\n\n")
+    out.write(" same => n,Hangup()\n")
+    # 他のコンテキストからは従来どおり Goto(fax-receive,s,1) で呼べるように
+    # しておく (着信ルート・[fax-safety-net]・内線テスト番号など)。
+    # 実体は上の 'fax' エクステンション。
+    out.write("exten => s,1,Goto(fax-receive,fax,1)\n\n")
 
     # FAX 送信: 本ツールが AMI Originate で Local/s@fax-send-out を起こす。
     # 変数 FAX_FILE / FAX_DEST / FAX_TRUNK / FAX_SID で送信内容を受け取る。
@@ -1818,8 +2010,8 @@ def _render_fax_context(fax: FaxConfig, hook_token: str) -> str:
     out.write("[fax-send-out]\n")
     out.write("exten => s,1,NoOp(FAX send to ${FAX_DEST} via ${FAX_TRUNK})\n")
     out.write(f" same => n,Set(FAXOPT(ecm)={'yes' if fax.ecm_enabled else 'no'})\n")
-    out.write(f" same => n,Set(FAXOPT(minrate)={fax.minrate})\n")
-    out.write(f" same => n,Set(FAXOPT(maxrate)={fax.maxrate})\n")
+    out.write(f" same => n,Set(FAXOPT(minrate)={_minrate})\n")
+    out.write(f" same => n,Set(FAXOPT(maxrate)={_maxrate})\n")
     out.write(" same => n,ExecIf($[\"${FAX_SID}\" != \"\"]"
               "?Set(FAXOPT(localstationid)=${FAX_SID}))\n")
     out.write(" same => n,ExecIf($[\"${FAX_HDR}\" != \"\"]"
@@ -1853,8 +2045,8 @@ def _render_fax_context(fax: FaxConfig, hook_token: str) -> str:
     # FAXOPT は Dial() が生成する新チャネル (実際に SendFAX を実行する側)
     # には自動継承されないため、[fax-send-out] だけでなくここでも
     # 明示的に再設定する (ecm と同じ理由・同じパターン)。
-    out.write(f" same => n,Set(FAXOPT(minrate)={fax.minrate})\n")
-    out.write(f" same => n,Set(FAXOPT(maxrate)={fax.maxrate})\n")
+    out.write(f" same => n,Set(FAXOPT(minrate)={_minrate})\n")
+    out.write(f" same => n,Set(FAXOPT(maxrate)={_maxrate})\n")
     # SendFAX オプション 'f' = T.38 対応チャネルでの音声フォールバックを
     # 許可。トランクに t38_udptl=yes を付与している (v0.3.11〜) ため、
     # このチャネルは Asterisk から見て「T.38対応」と判定され、SendFAX は
@@ -1863,7 +2055,9 @@ def _render_fax_context(fax: FaxConfig, hook_token: str) -> str:
     # ("Audio FAX not allowed ... T.38 negotiation failed; aborting")。
     # 'f' を付けることで T.38 が失敗しても音声 (G.711) モードへ自動的に
     # フォールバックし、送信を継続できる。
-    out.write(" same => n,SendFAX(${FAX_FILE},df)\n")
+    # 受信側と同じ考え方で、T.38 を使わない設定なら 'F' (最初から音声)。
+    _tx_opt = "df" if fax.t38_enabled is not False else "dF"
+    out.write(f" same => n,SendFAX(${{FAX_FILE}},{_tx_opt})\n")
     out.write(" same => n,Return()\n\n")
     return out.getvalue()
 
@@ -2882,7 +3076,7 @@ async def write_all_configs(
         起動に必須な asterisk.conf / modules.conf / stasis.conf 等は
         Asterisk パッケージのものをそのまま使う。
         対象: pjsip / extensions / queues / voicemail / musiconhold /
-              res_parking / features / rtp / manager
+              res_parking / res_fax / features / rtp / manager
 
     Bootstrap モード (include_bootstrap=True):
         完全に空の /etc/asterisk/ にこのディレクトリを置けば動くよう
@@ -2905,10 +3099,27 @@ async def write_all_configs(
     # Asterisk 12+: パークは res_parking.conf
     files["res_parking.conf"] = await render_res_parking_conf(db)
 
+    # res_fax.conf — FAX の通信速度 (modems=) はここでしか制限できない。
+    # FAXOPT(maxrate) だけでは res_fax_spandsp に伝わらないため、
+    # 画面の設定を効かせるにはこのファイルの生成が必須
+    # (詳細は _fax_rates のコメント)。
+    files["res_fax.conf"] = await render_res_fax_conf_from_db(db)
+
     #-- DB 由来ではないが運用設定 (このアプリで管理する)--
     files["features.conf"] = render_features_conf()
     files["rtp.conf"] = render_rtp_conf()
     files["manager.conf"] = render_manager_conf()
+
+    #-- logger.conf — 本ツールが書いたものだけ更新する--
+    # これまで logger.conf は bootstrap モードでしか生成していなかった。
+    # だが FAX の T.30 トレース (ReceiveFAX の 'd' オプションで出力される
+    # 受信側の詳細ログ) は logger.conf の [logfiles] に 'fax' レベルが
+    # 入っていないと一切出ない。旧バージョンで導入した環境には 'fax' が
+    # 無く、FAX 受信が失敗しても原因が追えない状態になる。
+    # そこで通常の反映でも更新するが、手で書き換えた logger.conf を
+    # 壊さないよう「無い」か「本ツールが生成した」ときだけ上書きする。
+    if not include_bootstrap and _is_generated_or_missing(out_dir / "logger.conf"):
+        files["logger.conf"] = render_logger_conf()
 
     #-- Bootstrap モード: Asterisk 起動に必須の静的 conf--
     if include_bootstrap:

@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     サブディレクトリ (managed 等) を指定すると Asterisk が実際に読む
     ファイルと本ツールが書き込むファイルの場所がズレて「変更を反映」が
     サイレントに空振りする事故の元になるため、既定値は直下にしている。"""
+    hts_voice_dir: Path = Field(default=Path("/var/lib/asterisk-pbx-web/hts-voice"))
+    """画面から追加する TTS 音響モデル (.htsvoice) の保存先。
+
+    apt で入る標準の声は /usr/share/hts-voice にあるが、root 所有のため
+    サービス実行ユーザーでは書き込めない。画面からの声パック導入と
+    .htsvoice アップロードはこのディレクトリへ保存し、一覧表示では
+    両方を走査する (app/services/tts_service.py の _hts_voice_dirs)。"""
+
     asterisk_sounds_dir: Path = Field(default=Path("/var/lib/asterisk/sounds/ja/managed"))
     """生成 WAV 音源の配置先。Asterisk が読めるパス。
        実機の標準は /var/lib/asterisk/sounds/<lang>/。"""
