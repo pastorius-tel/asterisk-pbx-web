@@ -467,6 +467,11 @@ pre {
   gap: 16px 24px;
   margin-bottom: 12px;
 }
+/* グリッドの子は既定の最小幅が min-content になるため、折り返せない
+   長い行 (コマンド例の <code class="line"> 等) が 1 つ入るだけで
+   行全体が広がり、スマホ幅でページが横にあふれる。0 を明示して
+   子要素側の overflow に任せる。 */
+.form-row > * { min-width: 0; }
 .form-row + .field,
 .field + .form-row,
 .field + .field { margin-top: 12px; }
@@ -671,6 +676,17 @@ pre {
   background: rgba(23, 105, 59, 0.08);
   padding: 1px 5px;
   border-radius: 3px;
+}
+.notice ul { margin: 6px 0 6px; padding-left: 1.3em; }
+.notice li { margin-bottom: 4px; }
+/* コマンド等を独立した行として見せる用。長い行はこの要素の中だけで
+   横スクロールさせ、ページ全体が横に伸びないようにする */
+.notice code.line {
+  display: block;
+  margin: 6px 0;
+  padding: 6px 8px;
+  white-space: pre;
+  overflow-x: auto;
 }
 
 /* 注意喚起 (未検証の機能など。エラーではないので赤は使わない) */
@@ -1091,3 +1107,56 @@ pre {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
 }
+
+/* =========================================================================
+   ファイル権限の診断テーブル (システム画面)
+   パスや chown コマンドが長いので、スマホ幅では表を横スクロールさせず
+   1 行 = 1 カード の積み上げ表示に切り替える。横スクロールだと「状態」
+   列が画面外に隠れてしまい、肝心の可否が見えないため。
+   ========================================================================= */
+.perm-table code { font-size: 12px; word-break: break-all; }
+.perm-table__feature { color: var(--c-text-muted); }
+.perm-table__fix { margin-top: 4px; }
+.perm-table__fix code {
+  display: inline-block;
+  background: var(--c-surface-2);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.perm-table__row--ng td { background: rgba(122, 74, 6, 0.05); }
+
+@media (max-width: 700px) {
+  .perm-table { min-width: 0; }
+  .perm-table thead { display: none; }
+  .perm-table, .perm-table tbody, .perm-table tr, .perm-table td { display: block; }
+  .perm-table tr {
+    border: 1px solid var(--c-border);
+    border-radius: 8px;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+  }
+  .perm-table td {
+    border-bottom: none;
+    padding: 3px 0;
+  }
+  .perm-table td::before {
+    content: attr(data-label) " ";
+    display: inline-block;
+    min-width: 4.5em;
+    color: var(--c-text-muted);
+    font-size: 11.5px;
+  }
+  .perm-table td[data-label="用途"]::before { display: none; }
+  .perm-table__fix code { display: block; margin-top: 2px; }
+}
+
+/* 日本語音声パックのライセンス同意チェック (システム画面) */
+.ja-ack {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ja-ack input { width: 16px; height: 16px; cursor: pointer; }

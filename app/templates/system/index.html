@@ -2,17 +2,56 @@
 
 {% block content %}
 
+{% if perm_problems %}
+  <div class="notice notice--warn">
+    <strong>ファイル権限に問題があります ({{ perm_problems | length }} 件)</strong>
+    <p>
+      本ツールは <code>{{ perm_user }}</code> として動いていますが、
+      下記のディレクトリに書き込めません。該当する機能
+      ({{ perm_problems | map(attribute='feature') | join(' / ') }})
+      が失敗します。
+      <a href="#perm-check">ファイル権限の診断</a>に対処コマンドがあります。
+    </p>
+  </div>
+{% endif %}
+
 <div class="form-grid">
 
   <fieldset class="form-section">
     <legend>日本語音声プロンプト</legend>
     <p class="form-hint">
-      <strong>takao-t/asterisk-sound-ja</strong> の日本語音声 (約 14MB / 約 540 ファイル) を
+      <a href="https://github.com/takao-t/asterisk-sound-ja" target="_blank"
+         rel="noopener noreferrer"><strong>takao-t/asterisk-sound-ja</strong></a>
+      の日本語音声 (約 14MB / 約 540 ファイル) を
       <code>{{ ja_sounds_dir }}</code> にインストールします。
-      作者: 高橋たかお氏 (voipinfo.jp 管理者) ・ 音源: Google GCP TTS 生成。
+      音源は Google Cloud TTS で生成されたものです。
       内線エンドポイントに <code>language=ja</code> が付与されると、
       ボイスメール案内・各種アナウンスが日本語で再生されるようになります。
     </p>
+
+    <div class="notice notice--warn">
+      <strong>ライセンスについて — インストール前にご確認ください</strong>
+      <p>
+        配布元のリポジトリには<strong>ライセンスの記載がありません</strong>。
+        ライセンスが示されていない著作物は、既定では著作権者が全ての権利を
+        留保している状態です。再配布・改変・業務での使用が許されるかは、
+        配布元に確認しない限り保証されません。
+      </p>
+      <p>
+        本ツールはこの音声を<strong>同梱・再配布していません</strong>。
+        下のボタンは、お使いのサーバーが配布元から直接ダウンロードするだけです。
+        <strong>業務で使用される場合は、配布元へ利用可否をご確認ください。</strong>
+      </p>
+      <p style="margin-bottom:0;">
+        確認が取れない場合は、<a href="/audio/tts">「音源」→「文章から音声を作る」</a>
+        の音声合成 (Open JTalk) で必要なアナウンスを作る方法もあります。
+      </p>
+    </div>
+
+    <label class="ja-ack">
+      <input type="checkbox" id="jaLicenseAck" onchange="toggleJaInstall()">
+      <span>上記を理解した上でインストールする</span>
+    </label>
     <p class="form-hint" style="font-size:12px;color:#666;">
       ファイル形式は wav のみ。Asterisk は再生時に
       ulaw / alaw / g722 等へ自動変換するため、ひかり電話 (ulaw) でも問題なく再生されます。
@@ -47,7 +86,7 @@
 
     <div class="form-row">
       <button type="button" class="btn btn--primary" id="installBtn"
-              onclick="installJaSounds()">
+              onclick="installJaSounds()" disabled>
         {% if ja_state.installed %}再インストール{% else %}日本語音声をインストール{% endif %}
       </button>
       <small class="field__help" style="margin-left:12px;">
@@ -61,6 +100,59 @@
          padding:12px;border-radius:6px;max-height:400px;overflow:auto;
          font-family:monospace;font-size:12px;white-space:pre-wrap;
          margin-top:12px;"></pre>
+  </fieldset>
+
+  <fieldset class="form-section" id="perm-check">
+    <legend>ファイル権限の診断</legend>
+    <p class="form-hint">
+      本ツールは Asterisk の設定ファイル・音源・スプールを直接読み書きします。
+      実行ユーザーにその権限が無いと、音源の登録やインストールが失敗します。
+      現在の実行ユーザーは <code>{{ perm_user }}:{{ perm_group }}</code> です。
+    </p>
+
+    <div class="table-scroll">
+      <table class="data-table perm-table">
+        <thead>
+          <tr>
+            <th>用途</th>
+            <th>パス</th>
+            <th>所有者</th>
+            <th>状態</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in perm_checks %}
+            <tr class="{{ 'perm-table__row--ng' if not c.ok }}">
+              <td data-label="用途">
+                <strong>{{ c.label }}</strong>
+                <br><small class="perm-table__feature">{{ c.feature }}</small>
+              </td>
+              <td data-label="パス"><code>{{ c.path }}</code></td>
+              <td data-label="所有者"><code>{{ c.owner }}</code></td>
+              <td data-label="状態">
+                {% if c.ok %}
+                  <span class="badge badge--ok">{% if c.needs_write %}書き込み可{% else %}読み取り可{% endif %}</span>
+                  {% if not c.exists %}
+                    <br><small class="perm-table__feature">まだ作成されていません (必要時に自動作成)</small>
+                  {% endif %}
+                {% else %}
+                  <span class="badge badge--off">{% if c.needs_write %}書き込み不可{% else %}読み取り不可{% endif %}</span>
+                  <div class="perm-table__fix">
+                    <small>対処:</small>
+                    <code>{{ c.fix_command }}</code>
+                  </div>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <p class="form-hint" style="margin-top:12px;">
+      個別に直す代わりに、まとめて修正することもできます。
+    </p>
+    <pre><code>sudo FIX_PERMISSIONS=1 bash scripts/setup_dependencies.sh</code></pre>
   </fieldset>
 
   <fieldset class="form-section">
@@ -273,6 +365,13 @@
       <strong>定期的に (設定変更のたびに) 作成し、サーバー外にもダウンロードして保管することを推奨します。</strong>
     </p>
 
+    {% if backup_error %}
+      <div class="notice notice--warn">
+        <strong>バックアップを作成できませんでした</strong>
+        <pre style="white-space:pre-wrap;margin:0;">{{ backup_error }}</pre>
+      </div>
+    {% endif %}
+
     <div class="form-row">
       <form method="post" action="/system/backups/create">
         <button type="submit" class="btn btn--primary">今すぐバックアップを作成</button>
@@ -413,7 +512,17 @@ exten => *99,1,Answer()
 </div>
 
 <script>
+// 配布元にライセンス表記が無いため、内容を読んだ上で実行してもらう。
+// チェックが入るまでインストールボタンは押せない。
+function toggleJaInstall() {
+  const ack = document.getElementById('jaLicenseAck');
+  const btn = document.getElementById('installBtn');
+  if (ack && btn) { btn.disabled = !ack.checked; }
+}
+
 async function installJaSounds() {
+  const ack = document.getElementById('jaLicenseAck');
+  if (!ack || !ack.checked) { return; }
   const btn = document.getElementById('installBtn');
   const log = document.getElementById('installLog');
   log.style.display = 'block';
@@ -421,7 +530,8 @@ async function installJaSounds() {
   btn.disabled = true;
   btn.textContent = 'インストール中…';
   try {
-    const resp = await fetch('/system/install-ja-sounds', {method: 'POST'});
+    const body = new URLSearchParams({ack: '1'});
+    const resp = await fetch('/system/install-ja-sounds', {method: 'POST', body: body});
     if (!resp.body) {
       log.textContent = 'ストリーミング非対応のブラウザです。';
       return;

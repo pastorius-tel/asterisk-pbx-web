@@ -59,9 +59,40 @@
           {% endfor %}
         </select>
         <small class="field__help">
-          既定は 4800〜14400。T.38 が使えず音声 (G.711) パススルーのみの
-          回線でネゴシエーションが不安定な場合、最大値を 9600 や 7200 に
-          下げると安定することがあります。
+          <strong>受信が毎回失敗する場合は、ここを 9600 に下げてみてください。</strong>
+          最大ボーレートに応じて、Asterisk が使う FAX モデムを
+          <code>res_fax.conf</code> に書き出して実際に制限します。
+          {% set _mx = cfg.maxrate or 14400 %}
+          <br>
+          現在の設定 ({{ _mx }} bps) で使われるモデム:
+          <code>{% if _mx >= 12000 %}v17, v27, v29{% elif _mx >= 7200 %}v27, v29{% else %}v27{% endif %}</code>
+          <br>
+          14400 bps (V.17) は T.38 が使えず音声 (G.711) で通信している
+          回線ではもっとも揺らぎに弱く、ログに
+          <code>Unexpected message received</code> が出て 0 ページで
+          終わる原因になります。9600 (V.29) まで下げると安定しやすく、
+          4800 (V.27ter) がもっとも確実です。
+        </small>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field field--toggle">
+        <span class="field__label">T.38 を使う</span>
+        <span class="toggle">
+          <input type="checkbox" name="t38_enabled" value="on"
+                 {% if cfg.t38_enabled %}checked{% endif %}>
+          <span class="toggle__track"><span class="toggle__thumb"></span></span>
+          <span class="toggle__hint">{% if cfg.t38_enabled %}有効{% else %}無効{% endif %}</span>
+        </span>
+        <small class="field__help">
+          T.38 は FAX をデジタルのまま送る方式ですが、ひかり電話の HGW/OG は
+          対応しておらず、Asterisk のログに
+          <code>refused to negotiate T.38</code> が毎回出ます。
+          通常は自動的に音声 (G.711) モードへ切り替わりますが、機種によっては
+          この切り替えの提案のあと音声が流れなくなり、受信できなくなることが
+          あります。無効にすると、提案自体を行わず最初から音声モードで
+          送受信します。ひかり電話しか使わない環境では無効のままで問題
+          ありません。
         </small>
       </label>
     </div>
@@ -85,6 +116,33 @@
           確実性が上がります。
         </small>
       </label>
+    </div>
+    <div class="form-row">
+      <div class="notice">
+        <strong>受信できないときの調べ方</strong>
+        受信が終わると Asterisk のログに次の行が出ます。
+        <code class="line">NoOp(FAXSTATUS=FAILED PAGES=0 ERROR=... MODE=audio RATE=9600 ...)</code>
+        <code>ERROR</code> が spandsp から返ってきた失敗理由で、
+        同じ内容は「FAX 一覧」の履歴にも残ります。代表的なもの:
+        <ul>
+          <li><code>Unexpected message received</code> …
+            通信中に順番どおりでないメッセージが届いた。上の
+            <strong>最大ボーレート</strong>を 9600 → 4800 と下げてみてください。</li>
+          <li><code>Timed out waiting for the first message</code> …
+            相手の音が届いていない。コーデック (ulaw) と
+            <code>t38_udptl</code> の設定、HGW の設定を確認してください。</li>
+          <li><code>Failed to train with any of the compatible modems</code> …
+            モデムの折衝に失敗。こちらも最大ボーレートを下げます。</li>
+        </ul>
+        さらに詳しい T.30 のやりとり (DIS/DCS/TCF の交換) を見るには、
+        <code>/etc/asterisk/logger.conf</code> の <code>[logfiles]</code> に
+        <code>fax</code> レベルを足して <code>logger reload</code> します。
+        <code class="line">console =&gt; notice,warning,error,fax</code>
+        本ツールは ReceiveFAX / SendFAX に常にデバッグ指定を付けているので、
+        この 1 行を足すだけでトレースが出ます
+        (Asterisk は専用ログレベルに出力しているため、この指定が無いと
+        どこにも出力されません)。
+      </div>
     </div>
     <div class="form-row">
       <label class="field">

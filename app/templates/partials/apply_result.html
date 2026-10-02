@@ -1,4 +1,14 @@
 <div class="apply-result__inner">
+  {% if error %}
+    <div class="notice notice--warn">
+      <strong>設定ファイルを書き出せませんでした</strong>
+      <pre style="white-space:pre-wrap;margin:0;">{{ error }}</pre>
+      <p style="margin-bottom:0;">
+        「システム」画面の<a href="/system/#perm-check">ファイル権限の診断</a>で
+        他に問題が無いかも確認できます。
+      </p>
+    </div>
+  {% endif %}
   <h3>生成ファイル</h3>
   <ul class="apply-result__files">
     {% for f in written %}
