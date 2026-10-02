@@ -38,6 +38,14 @@ SIP や Asterisk の設定ファイル記法を覚えていなくても運用で
 
 詳細は [SECURITY.md](SECURITY.md) を参照してください。
 
+### 第三者の音声データについて
+
+「システム」画面からインストールできる日本語音声プロンプトは、**配布元に
+ライセンスの記載がありません**。本ツールは同梱・再配布しておらず、
+インストール操作はお使いのサーバーが配布元から直接ダウンロードするだけですが、
+業務で使用される場合は配布元への確認をおすすめします。詳細は
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。
+
 ---
 
 ## 動作環境
@@ -140,6 +148,52 @@ PostgreSQL を使う場合は `pip install -e ".[postgres]"` を実行し、
 `.env` の `DATABASE_URL` を
 `postgresql+asyncpg://pbx:pbx@localhost:5432/pbx` の形式に変更します。
 
+### C. 更新 (すでに動いているサーバーに新しい版を入れる)
+
+設定 (`.env`)・データベース (`pbx.db`)・アップロード済みの音源・バックアップは
+**インストール先の中にあります**。配布 zip にはこれらが含まれていないので、
+上書き展開しても消えません。
+
+```bash
+# 例: /var/www/asterisk-pbx-web に入れている場合
+INSTALL_DIR=/var/www/asterisk-pbx-web
+
+# 1. 念のためバックアップ (「システム」画面からも作成できます)
+sudo cp -a "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.bak"
+sudo cp -a "$INSTALL_DIR/pbx.db" "$INSTALL_DIR/pbx.db.bak"
+
+# 2. サービスを止める
+sudo systemctl stop asterisk-pbx-web
+
+# 3. 新しい版を上書き展開
+#    (zip の中が asterisk-pbx-web/ というフォルダなので、一度展開してから中身を移す)
+cd /tmp
+unzip -qo ~/asterisk-pbx-web.zip
+sudo cp -r /tmp/asterisk-pbx-web/. "$INSTALL_DIR"/
+
+# 4. 依存パッケージを更新 (変更が無ければ何も起きません)
+cd "$INSTALL_DIR"
+sudo "$INSTALL_DIR/.venv/bin/pip" install -q -e .
+
+# 5. 所有者を戻してサービスを起動
+sudo chown -R asterisk:asterisk "$INSTALL_DIR"
+sudo systemctl start asterisk-pbx-web
+sudo systemctl status asterisk-pbx-web --no-pager
+```
+
+**最後に、Web 画面を開いて左下の「変更を Asterisk へ反映」を必ず 1 回押してください。**
+ダイヤルプラン (`extensions.conf` など) は、このボタンを押したときに初めて
+書き出されます。押さないと、更新前の設定ファイルのまま動き続けます。
+
+`git clone` で入れた場合は、3. の代わりに次のようにします。
+
+```bash
+cd "$INSTALL_DIR"
+sudo -u asterisk git pull
+```
+
+---
+
 ---
 
 ## 初期設定
@@ -186,7 +240,21 @@ python -m app.auth hash
 
 ### 2. ディレクトリの書き込み権限
 
-本ツールが Asterisk の設定ファイルと音源を書き込めるようにします。
+本ツールは Asterisk の設定ファイル・音源・スプールを直接読み書きします。
+実行ユーザーにその権限が無いと、音源の登録や日本語音声のインストールが
+失敗します。
+
+**まず「システム」画面の「ファイル権限の診断」を見てください。** 必要な
+ディレクトリの一覧と、書き込めるかどうか、書けない場合の修正コマンドが
+その場に表示されます。問題があるときは画面の先頭にも警告が出ます。
+
+まとめて直す場合:
+
+```bash
+sudo FIX_PERMISSIONS=1 bash scripts/setup_dependencies.sh
+```
+
+手で設定する場合:
 
 ```bash
 # 本ツールを動かすユーザーを asterisk グループに入れる
@@ -196,13 +264,35 @@ sudo usermod -aG asterisk $(whoami)
 sudo chgrp -R asterisk /etc/asterisk /var/lib/asterisk/sounds
 sudo chmod -R g+w /etc/asterisk /var/lib/asterisk/sounds
 
-# FAX・留守番電話を使う場合
-sudo mkdir -p /var/spool/asterisk/fax /var/lib/asterisk-pbx-web/fax
+# FAX・留守番電話・音響モデルを使う場合
+sudo mkdir -p /var/spool/asterisk/fax /var/lib/asterisk-pbx-web/fax \
+              /var/lib/asterisk-pbx-web/hts-voice
 sudo chgrp -R asterisk /var/spool/asterisk /var/lib/asterisk-pbx-web
 sudo chmod -R g+w /var/spool/asterisk /var/lib/asterisk-pbx-web
 ```
 
 グループの変更を反映するには、一度ログアウトして入り直してください。
+
+本ツールが使うディレクトリは次のとおりです。
+
+| 用途 | 既定のパス | 必要な権限 |
+|---|---|---|
+| Asterisk 設定ファイル | `/etc/asterisk` | 書き込み |
+| 音源の変換先 | `/var/lib/asterisk/sounds/ja/managed` | 書き込み |
+| 日本語音声プロンプト | `/var/lib/asterisk/sounds` | 書き込み |
+| 日時読み上げ音声 | `/var/lib/asterisk/sounds/ja/digits` | 書き込み |
+| TTS 音響モデル | `/var/lib/asterisk-pbx-web/hts-voice` | 書き込み |
+| アップロード一時置き場 | `./uploads` | 書き込み |
+| FAX スプール | `/var/spool/asterisk/fax` | 書き込み |
+| FAX 保存先 | `/var/lib/asterisk-pbx-web/fax` | 書き込み |
+| 留守番電話スプール | `/var/spool/asterisk/voicemail` | 読み書き |
+| バックアップ | `./backups` | 書き込み |
+| データベース | `./pbx.db` | 書き込み |
+
+> TTS の音響モデル (声) は、apt で入る標準の声が `/usr/share/hts-voice`
+> (root 所有) にあり書き込めないため、画面から追加する声は
+> `/var/lib/asterisk-pbx-web/hts-voice` に保存します。一覧表示では
+> 両方を探すので、apt で入れた声もそのまま選べます。
 
 ### 3. 最初に行う設定の順番
 
@@ -250,10 +340,10 @@ queues.conf        キュー
 voicemail.conf     留守番電話
 musiconhold.conf   保留音
 res_parking.conf   コールパーク
+res_fax.conf       FAX の通信速度 (モデム) と ECM
 features.conf      通話中の機能キー
 manager.conf       AMI
 rtp.conf           RTP ポート範囲
-cdr.conf           通話記録
 ```
 
 ### 初期状態の特番一覧
@@ -415,6 +505,92 @@ Asterisk の `res_fax_spandsp` を使って FAX を送受信します。
 
 `tiff2pdf` (libtiff-tools) と `gs` (Ghostscript) が必要です。
 
+#### 受信できないとき (`FAXSTATUS=FAILED` / `PAGES=0`)
+
+**1. まず失敗の理由を読む**
+
+受信が終わると、Asterisk のコンソールに次の行が出ます。
+
+```
+NoOp(FAXSTATUS=FAILED PAGES=0 ERROR=... DETAIL=... MODE=audio RATE=... REMOTE=...)
+```
+
+`ERROR` が spandsp から返ってきた実際の失敗理由で、同じ内容は
+「FAX 送受信」画面の履歴にも残ります。`MODE` は実際に使われた方式
+(`audio` = G.711 / `T38`) です。
+
+| `ERROR` の内容 | 意味と対処 |
+|---|---|
+| `Unexpected message received` | 通信中に順番どおりでないメッセージが届いた。**最大ボーレートを下げる** (下記 2) |
+| `Failed to train with any of the compatible modems` | モデムの折衝に失敗。同じく最大ボーレートを下げる |
+| `Timed out waiting for the first message` | 相手の音が届いていない。コーデック (`ulaw`) と HGW 側の設定を確認 |
+| `The CED tone exceeded 5s` | 相手が FAX として応答していない。相手番号・回線を確認 |
+
+**2. 最大ボーレートを下げる (もっとも効果が大きい)**
+
+「FAX 送受信」→「設定」の**最大ボーレート**を `9600`、それでも駄目なら
+`4800` にします。変更後は「変更を Asterisk へ反映」を押してください。
+
+この設定は、使用する FAX モデムを `res_fax.conf` の `modems=` として
+書き出します。
+
+| 最大ボーレート | 生成される `modems` | 備考 |
+|---|---|---|
+| 14400 / 12000 | `v17,v27,v29` | Asterisk 既定。音声回線ではもっとも不安定 |
+| 9600 / 7200 | `v27,v29` | 音声 (G.711) 回線で安定しやすい |
+| 4800 / 2400 | `v27` | もっとも確実だが遅い |
+
+> Asterisk 22 の `res_fax_spandsp` は `FAXOPT(maxrate)` を spandsp へ
+> 渡していないため、ダイヤルプラン側の指定だけでは速度は変わりません。
+> 実際に制限しているのは `res_fax.conf` の `modems=` で、本ツールは
+> この値から導出して生成しています。
+
+**3. 設定画面で「T.38 を使う」を無効にしてみる**
+
+ひかり電話の HGW/OG は T.38 に対応しておらず、Asterisk のログに
+`refused to negotiate T.38` が毎回出ます。通常は自動的に音声 (G.711)
+モードへ切り替わりますが、機種によってはこの切り替えの提案のあと音声が
+届かなくなり、受信できなくなることがあります。無効にすると最初から
+音声モードで送受信します。
+
+**4. 複数ページの 2 ページ目以降が欠ける場合**
+
+設定画面の「ECM (エラー訂正) を使う」を無効にしてみてください
+(ログに `T.30 ECM carrier not found` が多発している場合が該当します)。
+
+**5. T.30 のやりとりを詳しく見る**
+
+本ツールは `ReceiveFAX` / `SendFAX` に常にデバッグ指定を付けており、
+「変更を Asterisk へ反映」を押すと `logger.conf` に `fax` ログレベルも
+書き出すので、通常は何もしなくても DIS/DCS/TCF の交換過程が
+コンソールに出ます。
+
+```
+console => notice,warning,error,fax
+```
+
+Asterisk は FAX のトレースを専用のログレベルへ出力しているため、この
+指定が無いとどこにも出力されません (`fax set debug on` を打っても同じ)。
+
+`logger.conf` を手で書き換えている場合は、本ツールは上書きしません
+(先頭に `AUTO-GENERATED` の行があるファイルだけ更新します)。その場合は
+上の 1 行を自分で足して `sudo asterisk -rx "logger reload"` してください。
+
+**6. FAX モジュールが入っているか確認する**
+
+`ERROR` に上記のような T.30 のメッセージが出ていれば `res_fax_spandsp`
+は動いています。`FAXSTATUS` 自体が出ない場合だけ確認してください。
+
+```bash
+sudo asterisk -rx "fax show capabilities"
+sudo asterisk -rx "module show like fax"
+```
+
+`res_fax_spandsp.so` が無い場合は、Asterisk のビルド時に有効化されて
+いません。`menuselect` で `res_fax_spandsp` を有効にして再ビルドするか、
+`scripts/update_asterisk.sh` を実行してください
+(`libspandsp-dev` が入っていないとこのモジュールは作られません)。
+
 ### 電話帳と短縮ダイヤル
 
 よく使う番号を登録し、**2〜3 桁の短縮番号**を割り当てられます。
@@ -473,6 +649,21 @@ _0[789]0XXXXXXXX  携帯電話全般
 - **MP3 等をアップロード** — ffmpeg が Asterisk 用の WAV に自動変換します
 - **文章から音声を作る** — Open JTalk による日本語音声合成。
   声の種類・速度・高さを選べます
+- **声を追加する** — 女性の声 (東北 f01 / メイ) を画面からダウンロードして
+  追加できます。手持ちの `.htsvoice` をアップロードして使うこともできます
+
+### 日本語音声プロンプト
+
+「システム」画面のボタンから、日本語の音声プロンプト (約 540 ファイル) を
+インストールできます。`sudo` は不要で、サービス実行ユーザーのまま実行
+できます。失敗する場合は同じ画面の「ファイル権限の診断」を確認してください
+(`/var/lib/asterisk/sounds` への書き込み権限が必要です)。
+
+コマンドから実行することもできます。
+
+```bash
+sudo bash scripts/install_japanese_sounds.sh
+```
 
 ### 保留音・コールパーク
 
@@ -597,12 +788,58 @@ MIT License — Copyright (c) 2026 TNC
 全文は [LICENSE](LICENSE) を参照してください。
 商用・改変・再配布は自由です。**無保証**です。
 
+**MIT が適用されるのは、本リポジトリに含まれる自作のコードとドキュメントだけ
+です。** 本ツールが利用する第三者のソフトウェア・音声データには、それぞれの
+権利者のライセンスが適用されます。一覧と条件は
+**[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)** にまとめています。
+
 ### 同梱している第三者のソフトウェア
 
 | ソフトウェア | ライセンス | 用途 |
 |---|---|---|
-| [htmx](https://htmx.org/) 2.0.4 (`app/static/js/htmx.min.js`) | MIT (Zero-Clause BSD) | 画面の非同期通信 |
+| [htmx](https://htmx.org/) 2.0.4 (`app/static/js/htmx.min.js`) | Zero-Clause BSD (0BSD) | 画面の非同期通信 |
 
-Asterisk 本体 (GPLv2) は本ツールに同梱しておらず、別プロセスとして動作します。
-本ツールは Asterisk の設定ファイルを生成し、AMI (ネットワーク経由) で
-`reload` を指示するだけなので、GPL の派生物にはあたりません。
+音声ファイル・音響モデルの類は一切同梱していません。
+
+### ⚠ 日本語音声プロンプトを使う場合の注意
+
+「システム」画面からインストールできる日本語音声プロンプト
+([takao-t/asterisk-sound-ja](https://github.com/takao-t/asterisk-sound-ja)) は、
+**配布元にライセンスの記載がありません** (2026-10-02 時点)。
+
+ライセンスが示されていない著作物は、既定では著作権者が全ての権利を留保して
+いる状態です。本ツールはこの音声を同梱・再配布しておらず、インストール操作は
+お使いのサーバーが配布元から直接ダウンロードするだけですが、
+**業務で使用される場合は配布元へ利用可否をご確認ください。**
+
+確認が取れない場合は、「音源」→「文章から音声を作る」の音声合成 (Open JTalk)
+で必要なアナウンスを生成する方法もあります。
+
+### 音声合成の声 (音響モデル) について
+
+画面から追加できる「東北 f01」「メイ」は、いずれも**クリエイティブ・コモンズ
+表示 (CC BY) 系**のライセンスです。生成した音声を外部へ配布・公開する場合は、
+権利者名とライセンスの表示が必要です。詳細は
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。
+
+### 外部プログラムとの関係
+
+Asterisk 本体 (GPLv2)、FFmpeg、Ghostscript (AGPL v3)、Open JTalk などは
+本ツールに同梱しておらず、OS のパッケージとして入っているものを別プロセスと
+して呼び出すだけです (ライブラリとしてリンクしていません)。本ツールは
+Asterisk の設定ファイルを生成し、AMI (ネットワーク経由) で `reload` を指示する
+だけなので、GPL の派生物にはあたりません。
+
+> これらのバイナリを同梱して配布すると、配布物全体にそれぞれのライセンス
+> 条件が及ぶおそれがあります。配布形態を変える場合はご注意ください。
+
+### 商標
+
+「ひかり電話」「ひかり電話オフィスA」は NTT および NTT 東日本 / 西日本の、
+「Asterisk」は Sangoma Technologies Corporation の商標または登録商標です。
+本ツールは各社と提携・後援関係にはなく、接続対象を示す目的でのみ名称を
+使用しています。
+
+> 本リポジトリのライセンス関係の記述は、公開情報をもとに整理したもので
+> 法的な助言ではありません。商用で配布・提供される場合は、最新の条件を
+> ご確認のうえ、必要に応じて専門家にご相談ください。
