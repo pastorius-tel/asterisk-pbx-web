@@ -1,0 +1,114 @@
+[project]
+name = "asterisk-pbx-web"
+version = "0.8.2"
+description = "Asterisk PBX Web Management System (Python / FastAPI)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["asterisk", "pbx", "voip", "sip", "fax", "voicemail", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: System Administrators",
+    "Natural Language :: Japanese",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Telephony",
+]
+dependencies = [
+    # ここに書くのは「どの環境でも必要で、ビルド無しで入るもの」だけ。
+    # 32bit ARM (Raspberry Pi 2) では C/Rust 拡張のビルド済み配布物が
+    # 無いものが多いため、無くても動く高速化・任意機能は extras に分けた。
+    # 実際に入れる版数は requirements/*.lock で固定している。
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "uvicorn-worker>=0.2",          # gunicorn 用ワーカー (uvicorn.workers は非推奨)
+    "gunicorn>=23.0",               # 本番常駐用 (uvicorn worker を束ねる)
+    "sqlalchemy[asyncio]>=2.0.36",  # asyncio 版は greenlet が必須
+    "aiosqlite>=0.20",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.12",     # フォーム受信に必要
+    "itsdangerous>=2.2",            # SessionMiddleware が内部で使用
+]
+# 削除した依存 (v0.3.69):
+#   passlib[bcrypt] : コード中で未使用。本体が長く更新されておらず、
+#                     bcrypt の新しいバージョンと組み合わせると警告が出る
+#                     ため、使っていない以上は入れない
+#   httpx           : ARI 用に入れていたが未使用
+#   alembic         : マイグレーションは database.py の自動処理で行って
+#                     いるため未使用
+
+[project.optional-dependencies]
+# 通常版 (x86_64 / arm64) で入れる高速化オプション。
+# uvloop / httptools は C 拡張で、32bit ARM 向けのビルド済み配布物が無い
+# (Raspberry Pi 2 ではソースからのコンパイルになり失敗しやすい)。
+# 無くても uvicorn は標準の asyncio + h11 で動き、PBX 管理画面の用途では
+# 体感差はほぼ無い。
+fast = [
+    "uvicorn[standard]>=0.32",
+]
+# 受信 FAX の SMB/CIFS 外部保存 (任意機能)。
+# smbprotocol → cryptography → cffi と依存し、32bit ARM では cffi の
+# コンパイルが必要になるため、Raspberry Pi 版では既定で入れない。
+smb = [
+    "smbprotocol>=1.12",
+]
+# PostgreSQL を使う場合のみ追加で入れる:
+#   pip install -e ".[postgres]"
+# 既定の SQLite だけなら不要。asyncpg は C 拡張のため、Raspberry Pi 等の
+# ARM 環境ではビルド済みパッケージが無くコンパイルが必要になり、
+# 依存解決に失敗することがあるので必須依存には含めない。
+postgres = [
+    "asyncpg>=0.30",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+# uploads/ や pbx.db などが生成されても誤検出しないよう、
+# app とそのサブパッケージ (app.models 等) のみを対象にする
+include = ["app*"]
+exclude = ["uploads*", "scripts*", "tests*"]
+
+[tool.setuptools.package-data]
+# テンプレート・静的ファイルを同梱
+app = [
+    "templates/**/*.html",
+    "static/**/*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    # FastAPI では引数のデフォルト値に Depends()/Form()/File() を書くのが
+    # 公式の作法なので、この警告は無効化する
+    "B008",
+    # Codec/Transport 等の Enum は (str, Enum) 継承のままにする。
+    # StrEnum に変えると f-string での出力が "Codec.ULAW" ではなく
+    # "ulaw" になる…のではなく逆に (str,Enum) では "Codec.ULAW" となり
+    # 挙動が変わるため、Asterisk 設定ファイルの生成を壊す危険がある。
+    # 現状は DB へ生の文字列で保存され正しく動作しているので変更しない。
+    "UP042",
+    # 日本語コメント・説明文が多く 100 桁を超えやすい。可読性のために
+    # 無理な折り返しをするより、そのまま書けた方が読みやすいので許容する
+    "E501",
+]
