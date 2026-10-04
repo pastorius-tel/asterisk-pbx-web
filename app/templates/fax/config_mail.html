@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/fax/config" class="btn">← FAX 設定へ戻る</a>
+{% endblock %}
+
+{% block content %}
+
+{% if test_msg %}
+<div class="form-hint" style="padding:10px;border-radius:6px;
+  {% if test_ok %}background:#d1e7dd;border:1px solid #a3cfbb;
+  {% else %}background:#f8d7da;border:1px solid #f1aeb5;{% endif %}">
+  <strong>SMTP テスト:</strong> {{ test_msg }}
+</div>
+{% endif %}
+
+<p class="form-hint">
+  受信 FAX を PDF 添付でメール通知するための SMTP 設定です。
+  Gmail を使う場合は 2 段階認証を有効化し、<strong>アプリパスワード</strong>を発行して
+  下記パスワード欄に入力してください
+  (ホスト: <code>smtp.gmail.com</code> / ポート: <code>587</code> / セキュリティ: <code>STARTTLS</code>)。
+</p>
+
+<form method="post" action="/fax/config/mail" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>SMTP サーバー</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">SMTP ホスト</span>
+        <input class="field__input field__input--mono" name="smtp_host"
+               value="{{ cfg.smtp_host or '' }}" placeholder="smtp.gmail.com">
+      </label>
+      <label class="field">
+        <span class="field__label">ポート</span>
+        <input class="field__input field__input--mono" name="smtp_port" type="number"
+               value="{{ cfg.smtp_port or 587 }}">
+      </label>
+      <label class="field">
+        <span class="field__label">セキュリティ</span>
+        <select class="field__select" name="smtp_security">
+          <option value="starttls" {% if cfg.smtp_security == "starttls" %}selected{% endif %}>STARTTLS (587)</option>
+          <option value="ssl" {% if cfg.smtp_security == "ssl" %}selected{% endif %}>SSL/TLS (465)</option>
+          <option value="none" {% if cfg.smtp_security == "none" %}selected{% endif %}>なし (非推奨)</option>
+        </select>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">SMTP ユーザー名</span>
+        <input class="field__input field__input--mono" name="smtp_username"
+               value="{{ cfg.smtp_username or '' }}" placeholder="you@gmail.com" autocomplete="off">
+      </label>
+      <label class="field">
+        <span class="field__label">SMTP パスワード</span>
+        <input class="field__input field__input--mono" name="smtp_password" type="password"
+               placeholder="{% if cfg.smtp_password %}（変更時のみ入力）{% else %}アプリパスワード{% endif %}"
+               autocomplete="new-password">
+        <small class="field__help">空欄のまま保存すると既存パスワードを保持します。</small>
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>メール内容</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">送信元アドレス (From)</span>
+        <input class="field__input field__input--mono" name="mail_from"
+               value="{{ cfg.mail_from or '' }}" placeholder="fax@example.com">
+      </label>
+      <label class="field">
+        <span class="field__label">通知先アドレス (To)</span>
+        <input class="field__input field__input--mono" name="mail_to"
+               value="{{ cfg.mail_to or '' }}" placeholder="staff@example.com, boss@example.com">
+        <small class="field__help">カンマ区切りで複数指定可。</small>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">件名プレフィックス</span>
+        <input class="field__input" name="mail_subject_prefix"
+               value="{{ cfg.mail_subject_prefix or '[FAX受信]' }}">
+        <small class="field__help">例: <code>[FAX受信] 0312345678 (2026年05月15日 14:30)</code></small>
+      </label>
+    </div>
+    <label class="field">
+      <span class="field__label">本文テンプレート</span>
+      <textarea class="field__input field__input--mono" name="mail_body_template"
+                rows="8">{{ cfg.mail_body_template }}</textarea>
+      <small class="field__help">
+        使えるプレースホルダー: <code>{peer}</code> (相手番号) /
+        <code>{datetime}</code> (受信日時) / <code>{pages}</code>
+        (ページ数) / <code>{filename}</code> (保存ファイル名)。
+        空欄のまま保存すると変更されません。
+      </small>
+    </label>
+  </fieldset>
+
+  <div class="form-foot">
+    <button type="submit" class="btn btn--primary">メール設定を保存</button>
+    <button type="submit" formaction="/fax/config/mail/test" formmethod="post"
+            class="btn">SMTP 接続テスト</button>
+  </div>
+</form>
+
+{% endblock %}

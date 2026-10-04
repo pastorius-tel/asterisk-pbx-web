@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_number, field_select, field_toggle, errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+<form method="post" action="{{ form_action }}" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>基本</legend>
+    <div class="form-row">
+      {{ field_text("name", "IVR 名 (英数_)", item=item, submitted=submitted, required=True,
+                    pattern="[A-Za-z0-9_]+", monospace=True,
+                    help="extensions.conf のコンテキスト名 'ivr-<name>' になります。") }}
+      {{ field_text("display_name", "表示名", item=item, submitted=submitted, required=True,
+                    placeholder="代表受付メニュー") }}
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>ガイダンス音源</legend>
+    <div class="form-row">
+      {{ field_select("greeting_audio_id", "挨拶 (Background)", audio_choices,
+                      item=item, submitted=submitted, allow_empty=True,
+                      help="鳴らしながらキー入力を受け付けます。") }}
+      {{ field_select("invalid_audio_id", "無効キー時の案内", audio_choices,
+                      item=item, submitted=submitted, allow_empty=True) }}
+    </div>
+    <div class="form-row">
+      {{ field_select("timeout_audio_id", "タイムアウト時の案内", audio_choices,
+                      item=item, submitted=submitted, allow_empty=True) }}
+      {{ field_number("timeout_seconds", "タイムアウト (秒)",
+                      item=item, submitted=submitted, default=5, min=1, max=60) }}
+    </div>
+    <div class="form-row">
+      {{ field_number("max_retries", "最大リトライ回数",
+                      item=item, submitted=submitted, default=3, min=1, max=10) }}
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>キー → 動作 (DTMF メニュー)</legend>
+    <p class="form-hint">押されたキーに応じた転送先を指定します。空欄行は無視されます。</p>
+    <div class="table-scroll">
+    <table class="data-table" style="margin-bottom:8px">
+      <thead>
+        <tr><th style="width:80px">キー</th><th>動作</th><th>送信先</th><th>ラベル (任意)</th></tr>
+      </thead>
+      <tbody>
+        {% set existing = item.entries if item else [] %}
+        {% for i in range(10) %}
+          {% set e = existing[i] if i < existing|length else None %}
+          <tr>
+            <td>
+              <input class="field__input field__input--mono" name="entry_key"
+                     value="{{ e.key_input if e else '' }}"
+                     placeholder="1" maxlength="4" style="text-align:center">
+            </td>
+            <td>
+              <select class="field__select" name="entry_action">
+                <option value="hangup">— 切断 (未設定) —</option>
+                {% for opt in ivr_actions %}
+                  <option value="{{ opt.value }}" {% if e and e.action == opt.value %}selected{% endif %}>
+                    {{ opt.label }}
+                  </option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              <input class="field__input field__input--mono" name="entry_value"
+                     value="{{ e.action_value if e and e.action_value else '' }}"
+                     placeholder="1001 / グループ番号 / IVR名 等">
+            </td>
+            <td>
+              <input class="field__input" name="entry_label"
+                     value="{{ e.label if e and e.label else '' }}"
+                     placeholder="営業案内">
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>最終フォールバック (リトライ超過時)</legend>
+    <div class="form-row">
+      {{ field_select("fallback_action", "動作", ivr_actions,
+                      item=item, submitted=submitted, required=True) }}
+      {{ field_text("fallback_value", "送信先", item=item, submitted=submitted,
+                    monospace=True, help="例: 内線 → 1001 / リンググループ → 600") }}
+    </div>
+    <div class="form-row">
+      {{ field_toggle("enabled", "有効化", item=item, submitted=submitted, default=True) }}
+    </div>
+    {{ field_text("note", "メモ", item=item, submitted=submitted) }}
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/ivrs/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+{% endblock %}

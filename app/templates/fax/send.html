@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/fax/" class="btn">← FAX 一覧へ</a>
+{% endblock %}
+
+{% block content %}
+
+{% if error_message %}
+<div class="form-hint" style="background:#f8d7da;border:1px solid #f1aeb5;padding:10px;border-radius:6px;">
+  <strong>エラー:</strong> {{ error_message }}
+</div>
+{% endif %}
+
+{% if not cfg.enabled %}
+<div class="form-hint" style="background:#fff3cd;border:1px solid #ffe69c;padding:10px;border-radius:6px;">
+  FAX 機能が無効です。<a href="/fax/config">FAX 設定</a>で有効化してください。
+</div>
+{% endif %}
+
+{% if not tools.gs %}
+<div class="form-hint" style="background:#f8d7da;border:1px solid #f1aeb5;padding:10px;border-radius:6px;">
+  <code>gs</code> (ghostscript) が見つかりません。
+  <code>sudo apt install -y ghostscript</code> でインストールしてください。
+</div>
+{% endif %}
+
+<p class="form-hint">
+  PDF をアップロードして FAX 送信します。送信した PDF は
+  <code>送信FAX_YYYYMMDD_HHMM_宛先番号.pdf</code> として保存されます。
+</p>
+
+<form method="post" action="/fax/send" enctype="multipart/form-data"
+      class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>送信内容</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">宛先 FAX 番号 <span style="color:#c00">*</span></span>
+        <input class="field__input field__input--mono" name="dest_number"
+               required placeholder="0312345678" pattern="[0-9]+">
+        <small class="field__help">数字のみ。市外局番から入力。</small>
+      </label>
+      <label class="field">
+        <span class="field__label">送信に使うトランク <span style="color:#c00">*</span></span>
+        <select class="field__select" name="trunk_name" required>
+          {% if not trunks %}
+            <option value="">（トランクが未登録です）</option>
+          {% else %}
+            {% for t in trunks %}
+              <option value="{{ t.name }}">{{ t.name }} ({{ t.host }})</option>
+            {% endfor %}
+          {% endif %}
+        </select>
+        <small class="field__help">ひかり電話など発信に使う回線。</small>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">送信する PDF <span style="color:#c00">*</span></span>
+        <input class="field__input" type="file" name="file"
+               accept="application/pdf,.pdf" required>
+        <small class="field__help">
+          PDF を G3 FAX 形式 (204×196dpi モノクロ) に自動変換して送信します。
+        </small>
+      </label>
+    </div>
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/fax/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary"
+            {% if not cfg.enabled or not tools.gs or not trunks %}disabled{% endif %}>
+      FAX 送信
+    </button>
+  </div>
+</form>
+
+<p class="form-hint" style="margin-top:16px;">
+  送信は Asterisk の <code>SendFAX</code> (spandsp) で行われます。
+  送信結果 (成功/失敗) は FAX 一覧の履歴に記録されます。
+  相手が話中・FAX 非対応の場合は失敗履歴になります。
+</p>
+
+{% endblock %}

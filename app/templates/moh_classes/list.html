@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/moh-classes/new" class="btn btn--primary">+ 保留音クラスを追加</a>
+{% endblock %}
+
+{% block content %}
+
+<p class="form-hint">
+  保留音クラスは <code>musiconhold.conf</code> の <code>[section]</code> として出力されます。
+  クラスを <strong>default</strong> として指定すると、保留時/パーク時の既定音源になります。
+</p>
+
+{% if not items %}
+<div class="empty">
+  <p>保留音クラスがありません。</p>
+  <p class="empty__hint">先に <a href="/audio/new">音源</a> をアップロードしてから追加してください。</p>
+  <a href="/moh-classes/new" class="btn btn--primary">保留音クラスを追加</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>クラス名</th>
+      <th>表示名</th>
+      <th>並び</th>
+      <th>含まれる音源</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td class="mono">
+        <strong>{{ it.class_name }}</strong>
+        {% if it.is_default %}<span class="badge badge--hikari">既定</span>{% endif %}
+      </td>
+      <td>{{ it.display_name }}</td>
+      <td class="mono">{{ it.sort_mode }}</td>
+      <td>{{ it.items|length }} ファイル</td>
+      <td>
+        {% if it.enabled %}<span class="badge badge--ok">有効</span>
+        {% else %}<span class="badge badge--off">無効</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/moh-classes/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/moh-classes/{{ it.id }}/delete"
+              onsubmit="return confirm('保留音クラス {{ it.class_name }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

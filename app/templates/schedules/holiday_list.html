@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block content %}
+<p class="form-hint">
+  取り込み済みの国民の祝日です。この一覧は確認用です。祝日データの
+  取り込み・削除は「スケジュール設定」画面の「⑤ 祝日データの取得」
+  から行ってください。
+</p>
+
+{% if not holidays %}
+<div class="empty">
+  <p>祝日データがまだ取り込まれていません。</p>
+  <a href="/schedules/" class="btn btn--primary">スケジュール設定へ</a>
+</div>
+{% else %}
+{% for y in years %}
+<section class="panel">
+  <header class="panel__head"><h2>{{ y }}年</h2></header>
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead>
+      <tr><th style="min-width:150px">日付</th><th>名称</th></tr>
+    </thead>
+    <tbody>
+      {% for h in holidays if h.year == y %}
+      <tr>
+        <td class="mono">{{ h.holiday_date.strftime("%Y年%m月%d日") }}</td>
+        <td>{{ h.name }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endfor %}
+{% endif %}
+{% endblock %}

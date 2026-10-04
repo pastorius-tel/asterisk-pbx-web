@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_select, field_toggle, errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+<form method="post" action="{{ form_action }}" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>番号</legend>
+    {{ field_text("pattern", "番号 / パターン", item=item, submitted=submitted, required=True,
+                  placeholder="0312345678", monospace=True,
+                  help="完全な番号 (例: 0312345678) か、先頭に _ を付けたパターン (例: _03XXXXXXXX で03から始まる10桁全体、_0AAAABBBBCC で末尾一致等) を指定できます。X=数字1桁、Z=1-9、N=2-9。") }}
+    <div class="form-row">
+      {{ field_toggle("enabled", "有効化", item=item, submitted=submitted, default=True) }}
+    </div>
+    {{ field_text("note", "メモ (理由等)", item=item, submitted=submitted, placeholder="しつこい勧誘") }}
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>該当した場合の処理</legend>
+    {% set cur_action = (submitted.action if submitted else (item.action if item else "hangup")) %}
+    <p class="form-hint">
+      この判定は<strong>着信の一番最初</strong>に行われます。内線が鳴る前に
+      処理されるため、ブロックした番号で電話機が鳴ることはありません。
+    </p>
+    <label class="field" style="max-width:360px">
+      <span class="field__label">処理<em class="req">*</em></span>
+      <select class="field__select" name="action" id="bn_action">
+        <option value="hangup" {% if cur_action == "hangup" %}selected{% endif %}>
+          応答せずに即切断
+        </option>
+        <option value="playback_hangup" {% if cur_action == "playback_hangup" %}selected{% endif %}>
+          メッセージを流してから切断
+        </option>
+        <option value="voicemail" {% if cur_action == "voicemail" %}selected{% endif %}>
+          留守番電話へ転送
+        </option>
+      </select>
+    </label>
+
+    <div class="field" data-when-action="hangup">
+      <small class="field__help">
+        呼び出し音が鳴る前に切断します。応答しないため<strong>相手に通話料がかかりません</strong>。
+        相手からは「話し中」や「おかけになった電話は…」のように聞こえます。
+      </small>
+    </div>
+
+    <div class="field" data-when-action="playback_hangup">
+      <label class="field" style="max-width:360px">
+        <span class="field__label">流す音源<em class="req">*</em></span>
+        <select class="field__select" name="audio_id">
+          <option value="">— 選択してください —</option>
+          {% set cur_audio = (submitted.audio_id if submitted else (item.audio_id if item else None)) %}
+          {% for opt in audio_choices %}
+          <option value="{{ opt.value }}"
+                  {% if cur_audio and opt.value == cur_audio|string %}selected{% endif %}>{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% if not audio_choices %}
+      <small class="field__help">
+        選べる音源がありません。先に「音源」画面で音声をアップロードするか、
+        「文章から音声を作る」で作成してください。
+      </small>
+      {% else %}
+      <small class="field__help">
+        「こちらの番号へのおかけ直しはご遠慮ください」といった案内を流してから切断します。
+        <strong>応答するため相手に通話料が発生します。</strong>
+      </small>
+      {% endif %}
+    </div>
+
+    <div class="field" data-when-action="voicemail">
+      {{ field_select("voicemail_target", "転送先内線", ext_choices,
+                      item=item, submitted=submitted, allow_empty=True) }}
+      <small class="field__help">
+        用件だけ残させたい相手に。録音内容は「留守番電話」画面で確認できます。
+      </small>
+    </div>
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/blocked-numbers/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+
+<script>
+(function () {
+  // 選んだ処理に関係のある欄だけを表示する
+  var sel = document.getElementById('bn_action');
+  var blocks = document.querySelectorAll('[data-when-action]');
+  function refresh() {
+    blocks.forEach(function (el) {
+      el.style.display = (el.dataset.whenAction === sel.value) ? '' : 'none';
+    });
+  }
+  sel.addEventListener('change', refresh);
+  refresh();
+})();
+</script>
+{% endblock %}

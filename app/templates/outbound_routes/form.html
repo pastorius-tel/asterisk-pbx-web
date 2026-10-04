@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_number, field_select, field_toggle, errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+<form method="post" action="{{ form_action }}" class="form-grid" autocomplete="off">
+
+  {# ========== 基本 ========== #}
+  <fieldset class="form-section">
+    <legend>基本</legend>
+    <div class="form-row">
+      {{ field_text("name", "ルート名",
+                    item=item, submitted=submitted, required=True,
+                    placeholder="国内発信") }}
+      {{ field_number("priority", "優先順位",
+                      item=item, submitted=submitted, default=100, min=1, max=9999,
+                      help="数値が小さいほど先にマッチ判定。") }}
+    </div>
+  </fieldset>
+
+  {# ========== マッチ条件 ========== #}
+  <fieldset class="form-section">
+    <legend>マッチ条件 (ダイヤルパターン)</legend>
+    <p class="form-hint">よく使うパターン (クリックで挿入):</p>
+    <div class="preset-grid">
+      {% for p in pattern_presets %}
+        <button type="button" class="chip"
+                onclick="document.getElementsByName('pattern')[0].value='{{ p.value }}'">
+          {{ p.label }}
+          <code>{{ p.value }}</code>
+        </button>
+      {% endfor %}
+    </div>
+
+    {{ field_text("pattern", "パターン",
+                  item=item, submitted=submitted, required=True, monospace=True,
+                  placeholder="_0Z.",
+                  help="Asterisk 拡張パターン。X=数字, Z=1-9, N=2-9, .=任意、!=0桁以上。先頭 _ は自動付与可。") }}
+  </fieldset>
+
+  {# ========== 番号操作 ========== #}
+  <fieldset class="form-section">
+    <legend>番号操作</legend>
+    <div class="form-row">
+      {{ field_number("prefix_strip", "先頭から削る桁数",
+                      item=item, submitted=submitted, default=0, min=0, max=10,
+                      help="例: ユーザーが '9' を付けて発信 → 1 桁削除。") }}
+      {{ field_text("prefix_prepend", "発信前に付加する番号",
+                    item=item, submitted=submitted, monospace=True,
+                    help="例: トランクが '+81' 必須なら '+81'。") }}
+    </div>
+  </fieldset>
+
+  {# ========== 送信先 ========== #}
+  <fieldset class="form-section">
+    <legend>送信先</legend>
+    {{ field_select("trunk_id", "トランク", trunks,
+                    item=item, submitted=submitted, required=True, allow_empty=True) }}
+    {{ field_text("cid_override", "発信者番号の上書き",
+                  item=item, submitted=submitted, monospace=True,
+                  help="未指定でトランクの設定値を使用。") }}
+  </fieldset>
+
+  {# ========== 制限 ========== #}
+  <fieldset class="form-section">
+    <legend>制限</legend>
+    <div class="form-row">
+      {{ field_toggle("require_password", "発信時パスワード要求",
+                      item=item, submitted=submitted, default=False,
+                      help="国際電話など。発信前に DTMF で入力させる。") }}
+      {{ field_text("password", "パスワード",
+                    item=item, submitted=submitted, monospace=True, pattern="\\d{4,16}") }}
+    </div>
+    <div class="form-row">
+      {{ field_toggle("enabled", "このルートを有効化",
+                      item=item, submitted=submitted, default=True) }}
+    </div>
+    {{ field_text("note", "メモ", item=item, submitted=submitted) }}
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/outbound-routes/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+{% endblock %}

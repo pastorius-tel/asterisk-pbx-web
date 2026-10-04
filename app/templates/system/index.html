@@ -1,0 +1,606 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{% if perm_problems %}
+  <div class="notice notice--warn">
+    <strong>ファイル権限に問題があります ({{ perm_problems | length }} 件)</strong>
+    <p>
+      本ツールは <code>{{ perm_user }}</code> として動いていますが、
+      下記のディレクトリに書き込めません。該当する機能
+      ({{ perm_problems | map(attribute='feature') | join(' / ') }})
+      が失敗します。
+      <a href="#perm-check">ファイル権限の診断</a>に対処コマンドがあります。
+    </p>
+  </div>
+{% endif %}
+
+<div class="form-grid">
+
+  <fieldset class="form-section">
+    <legend>日本語音声プロンプト</legend>
+    <p class="form-hint">
+      <a href="https://github.com/takao-t/asterisk-sound-ja" target="_blank"
+         rel="noopener noreferrer"><strong>takao-t/asterisk-sound-ja</strong></a>
+      の日本語音声 (約 14MB / 約 540 ファイル) を
+      <code>{{ ja_sounds_dir }}</code> にインストールします。
+      音源は Google Cloud TTS で生成されたものです。
+      内線エンドポイントに <code>language=ja</code> が付与されると、
+      ボイスメール案内・各種アナウンスが日本語で再生されるようになります。
+    </p>
+
+    <div class="notice notice--warn">
+      <strong>ライセンスについて — インストール前にご確認ください</strong>
+      <p>
+        配布元のリポジトリには<strong>ライセンスの記載がありません</strong>。
+        ライセンスが示されていない著作物は、既定では著作権者が全ての権利を
+        留保している状態です。再配布・改変・業務での使用が許されるかは、
+        配布元に確認しない限り保証されません。
+      </p>
+      <p>
+        本ツールはこの音声を<strong>同梱・再配布していません</strong>。
+        下のボタンは、お使いのサーバーが配布元から直接ダウンロードするだけです。
+        <strong>業務で使用される場合は、配布元へ利用可否をご確認ください。</strong>
+      </p>
+      <p style="margin-bottom:0;">
+        確認が取れない場合は、<a href="/audio/tts">「音源」→「文章から音声を作る」</a>
+        の音声合成 (Open JTalk) で必要なアナウンスを作る方法もあります。
+      </p>
+    </div>
+
+    <label class="ja-ack">
+      <input type="checkbox" id="jaLicenseAck" onchange="toggleJaInstall()">
+      <span>上記を理解した上でインストールする</span>
+    </label>
+    <p class="form-hint" style="font-size:12px;color:#666;">
+      ファイル形式は wav のみ。Asterisk は再生時に
+      ulaw / alaw / g722 等へ自動変換するため、ひかり電話 (ulaw) でも問題なく再生されます。
+    </p>
+
+    <div class="form-row">
+      <div class="field">
+        <span class="field__label">インストール状況</span>
+        {% if ja_state.installed %}
+          <div>
+            <span class="badge badge--ok">インストール済</span>
+            <small style="margin-left:8px;">
+              総ファイル数: {{ ja_state.file_count }} ・
+              代表ファイル: {{ ja_state.samples_found | join(', ') }}
+            </small>
+          </div>
+        {% else %}
+          <div>
+            <span class="badge badge--off">未インストール</span>
+            <small style="margin-left:8px;color:#666;">
+              {% if ja_state.file_count %}
+                {{ ja_sounds_dir }} に {{ ja_state.file_count }} ファイルありますが、
+                代表ファイルが不足しています。
+              {% else %}
+                {{ ja_sounds_dir }} は空または存在しません。
+              {% endif %}
+            </small>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="form-row">
+      <button type="button" class="btn btn--primary" id="installBtn"
+              onclick="installJaSounds()" disabled>
+        {% if ja_state.installed %}再インストール{% else %}日本語音声をインストール{% endif %}
+      </button>
+      <small class="field__help" style="margin-left:12px;">
+        GitHub (raw.githubusercontent.com) から約 14MB をダウンロードします。
+        サーバーから外部HTTPSへ接続できる必要があります。
+        所要時間は通信環境により数秒〜数十秒。
+      </small>
+    </div>
+
+    <pre id="installLog" style="display:none;background:#0d1117;color:#c9d1d9;
+         padding:12px;border-radius:6px;max-height:400px;overflow:auto;
+         font-family:monospace;font-size:12px;white-space:pre-wrap;
+         margin-top:12px;"></pre>
+  </fieldset>
+
+  <fieldset class="form-section" id="perm-check">
+    <legend>ファイル権限の診断</legend>
+    <p class="form-hint">
+      本ツールは Asterisk の設定ファイル・音源・スプールを直接読み書きします。
+      実行ユーザーにその権限が無いと、音源の登録やインストールが失敗します。
+      現在の実行ユーザーは <code>{{ perm_user }}:{{ perm_group }}</code> です。
+    </p>
+
+    <div class="table-scroll">
+      <table class="data-table perm-table">
+        <thead>
+          <tr>
+            <th>用途</th>
+            <th>パス</th>
+            <th>所有者</th>
+            <th>状態</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in perm_checks %}
+            <tr class="{{ 'perm-table__row--ng' if not c.ok }}">
+              <td data-label="用途">
+                <strong>{{ c.label }}</strong>
+                <br><small class="perm-table__feature">{{ c.feature }}</small>
+              </td>
+              <td data-label="パス"><code>{{ c.path }}</code></td>
+              <td data-label="所有者"><code>{{ c.owner }}</code></td>
+              <td data-label="状態">
+                {% if c.ok %}
+                  <span class="badge badge--ok">{% if c.needs_write %}書き込み可{% else %}読み取り可{% endif %}</span>
+                  {% if not c.exists %}
+                    <br><small class="perm-table__feature">まだ作成されていません (必要時に自動作成)</small>
+                  {% endif %}
+                {% else %}
+                  <span class="badge badge--off">{% if c.needs_write %}書き込み不可{% else %}読み取り不可{% endif %}</span>
+                  <div class="perm-table__fix">
+                    <small>対処:</small>
+                    <code>{{ c.fix_command }}</code>
+                  </div>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <p class="form-hint" style="margin-top:12px;">
+      個別に直す代わりに、まとめて修正することもできます。
+    </p>
+    <pre><code>sudo FIX_PERMISSIONS=1 bash scripts/setup_dependencies.sh</code></pre>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>システム言語</legend>
+    <p class="form-hint">
+      内線エンドポイントの <code>language=</code> に設定する値です。
+      Asterisk は再生する音声プロンプトをこの値に基づいて選択します
+      (例: <code>language=ja</code> ならまず <code>sounds/ja/</code> を探す。
+      無ければ英語にフォールバック)。
+    </p>
+    <form method="post" action="/system/language">
+      <div class="form-row">
+        <label class="field">
+          <span class="field__label">言語</span>
+          <select class="field__select" name="lang" onchange="this.form.submit()">
+            <option value="ja" {% if current_language == "ja" %}selected{% endif %}>日本語 (ja)</option>
+            <option value="en" {% if current_language == "en" %}selected{% endif %}>English (en)</option>
+            <option value="" {% if current_language == "" %}selected{% endif %}>(言語設定なし)</option>
+          </select>
+          <small class="field__help">
+            変更後、ダッシュボードの「変更を Asterisk へ反映」を押すと
+            pjsip.conf が再生成されて反映されます。
+            この設定は DB に保存されるため、サービス再起動やワーカー再起動でも維持されます。
+          </small>
+        </label>
+      </div>
+    </form>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>留守番電話の録音日時アナウンス</legend>
+    {% if dt_error %}
+    <div class="errors" role="alert">
+      <strong>日時読み上げ用の音声が揃っていないため、有効にできません。</strong>
+      <p>
+        先に <a href="/audio/tts">「音源」→「文章から音声を作る」</a> の
+        「留守番電話の日時読み上げ用の音声」で音声を生成してください。
+      </p>
+    </div>
+    {% endif %}
+    <p class="form-hint">
+      内線から <code>*97</code> で留守番電話を聞くとき、メッセージの前に
+      「〇月〇日〇時〇分」と録音日時を読み上げるかどうかの設定です。
+    </p>
+    <p class="form-hint">
+      日時読み上げ用の音声:
+      <strong>{{ dt_sounds_done }} / {{ dt_sounds_total }}</strong> ファイル
+      {% if dt_sounds_done >= dt_sounds_total %}
+      <span class="badge badge--ok">生成済み</span>
+      {% else %}
+      <span class="badge badge--off">未生成</span>
+      — <a href="/audio/tts">「文章から音声を作る」画面</a>で生成してください
+      {% endif %}
+    </p>
+    <form method="post" action="/system/voicemail-announce" class="form-grid">
+      <label class="field field--toggle">
+        <span class="field__label">録音日時を読み上げる</span>
+        <span class="toggle">
+          <input type="checkbox" name="announce_datetime" value="on"
+                 {% if voicemail_announce_datetime %}checked{% endif %}
+                 {% if dt_sounds_done < dt_sounds_total %}disabled{% endif %}>
+          <span class="toggle__track"><span class="toggle__thumb"></span></span>
+          <span class="toggle__hint">
+            {% if voicemail_announce_datetime %}有効{% else %}無効{% endif %}
+          </span>
+        </span>
+        <small class="field__help">
+          音声が未生成のうちは有効にできません (再生時にエラーで通話が
+          切れてしまうため)。変更後は「変更を Asterisk へ反映」を
+          実行してください。
+        </small>
+      </label>
+      <div class="form-foot">
+        <button type="submit" class="btn btn--primary">保存</button>
+      </div>
+    </form>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>迷惑電話対策</legend>
+    <p class="form-hint">
+      個別の番号は <a href="/blocked-numbers/">迷惑電話ブロックリスト</a>
+      画面で登録・管理してください。ここでは、海外からの着信 (と判定
+      した場合) の一律の処理を設定します。
+    </p>
+    <p class="form-hint">
+      <strong>判定方法について</strong>: 発信者番号が日本の標準的な
+      国内番号パターン (0 で始まる携帯電話・固定電話・IP電話・
+      フリーダイヤル等) に一致しない場合、海外または形式不明の番号と
+      みなします。個々の国番号や「+」「010」プレフィックスの正確な
+      形式は回線・キャリアによって異なり確実に特定できないため、
+      消去法での判定になります。実際の着信で意図通り動作しているか、
+      導入後にご確認ください。
+    </p>
+    <form method="post" action="/system/nuisance-settings" class="form-grid">
+      <div class="form-row">
+        <label class="field">
+          <span class="field__label">海外からの着信の処理</span>
+          <select class="field__select" name="international_call_action" id="intl_action_select"
+                  onchange="document.getElementById('intl_vm_target').style.display = (this.value === 'voicemail') ? '' : 'none';">
+            <option value="none" {% if international_call_action == "none" %}selected{% endif %}>何もしない (通常通り着信)</option>
+            <option value="voicemail" {% if international_call_action == "voicemail" %}selected{% endif %}>指定内線の留守番電話へ</option>
+            <option value="hangup" {% if international_call_action == "hangup" %}selected{% endif %}>即切断</option>
+          </select>
+        </label>
+        <label class="field" id="intl_vm_target" style="{% if international_call_action != 'voicemail' %}display:none;{% endif %}">
+          <span class="field__label">転送先内線</span>
+          <select class="field__select" name="international_voicemail_target">
+            <option value="">— 選択してください —</option>
+            {% for opt in ext_choices %}
+            <option value="{{ opt.value }}" {% if international_voicemail_target == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div class="form-foot">
+        <button type="submit" class="btn btn--primary">保存</button>
+      </div>
+    </form>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>内線番号 / 外線発信ポリシー</legend>
+    <p class="form-hint">
+      有効にすると、内線同士のダイヤルプラン (3〜5桁) は
+      <strong>先頭の桁が 2〜9 の番号にしか反応しなくなります</strong>。
+      0 または 1 で始まる番号 (携帯電話 090/080/070、固定電話 03/06、
+      フリーダイヤル 0120、警察 110・消防 119 などの特番) は
+      内線パターンに一切マッチしないため、必ず発信ルート (トランク) 側の
+      判定に回ります。内線番号は 2 以降の数字で運用してください。
+    </p>
+    <form method="post" action="/system/dial-policy">
+      <div class="form-row">
+        <label class="field" style="flex-direction:row;align-items:center;gap:8px;">
+          <input type="checkbox" name="reserve_leading_01" value="on"
+                 {% if reserve_leading_01_for_outbound %}checked{% endif %}
+                 onchange="this.form.submit()">
+          <span class="field__label" style="margin:0;">
+            0/1 始まりの番号を外線発信専用に予約する (推奨: ON)
+          </span>
+        </label>
+        <small class="field__help">
+          現在の内線ダイヤルパターン:
+          <code>{% if reserve_leading_01_for_outbound %}_NXX / _NXXX / _NXXXX{% else %}_XXX / _XXXX / _XXXXX{% endif %}</code>
+          (N = 2〜9、X = 0〜9)。
+          変更後、ダッシュボードの「変更を Asterisk へ反映」を押すと
+          extensions.conf が再生成されて反映されます。
+          この設定は DB に保存されるため、サービス再起動やワーカー再起動でも維持されます。
+        </small>
+      </div>
+    </form>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>内線 SIP ポート</legend>
+    <p class="form-hint">
+      内線 (PJSIP UDP transport) が待受する SIP ポートです。既定は
+      <code>5060</code>。他システムとポートが衝突する場合などに変更してください。
+    </p>
+    <form method="post" action="/system/sip-port">
+      <div class="form-row">
+        <label class="field">
+          <span class="field__label">SIP ポート</span>
+          <input class="field__input field__input--mono" type="number"
+                 name="sip_port" value="{{ sip_port }}" min="1" max="65535"
+                 style="max-width:160px;">
+          <small class="field__help">
+            変更後、ダッシュボードの「変更を Asterisk へ反映」を押すと
+            pjsip.conf が再生成されます。
+            <strong>ソフトフォン側の設定 (SIPポート) も同じ値に合わせて変更してください。</strong>
+            変更を反映すると、既存の登録が一時的に切断されます。
+          </small>
+        </label>
+        <button type="submit" class="btn btn--primary" style="align-self:flex-start;margin-top:22px;">変更</button>
+      </div>
+    </form>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>内線同士の鳴音時間</legend>
+    <p class="form-hint">
+      内線から内線へ電話をかけた際、相手の電話機を何秒間鳴らすかの設定です
+      (ボイスメール設定があれば、この秒数を過ぎるとボイスメールへ転送されます)。
+      既定は <code>30</code> 秒。
+    </p>
+    <form method="post" action="/system/internal-ring-seconds">
+      <div class="form-row">
+        <label class="field">
+          <span class="field__label">鳴音時間 (秒)</span>
+          <input class="field__input field__input--mono" type="number"
+                 name="internal_ring_seconds" value="{{ internal_ring_seconds }}"
+                 min="5" max="120" style="max-width:160px;">
+          <small class="field__help">
+            5〜120 の範囲で指定してください。変更後、ダッシュボードの
+            「変更を Asterisk へ反映」を押すと extensions.conf が
+            再生成されます。
+          </small>
+        </label>
+        <button type="submit" class="btn btn--primary" style="align-self:flex-start;margin-top:22px;">変更</button>
+      </div>
+    </form>
+  </fieldset>
+
+  <fieldset class="form-section" id="versions">
+    <legend>バージョン情報</legend>
+    <p class="form-hint">
+      このサーバーで実際に動いている版数です。不具合の報告や、別のサーバーと
+      環境を比べるときにお使いください。Python ライブラリは、動作確認した版
+      (<code>requirements/{{ vr.lock_name }}</code>) と比べています。
+    </p>
+
+    <div class="table-scroll">
+      <table class="data-table version-table">
+        <tbody>
+          <tr><th style="width:9em;">エディション</th><td>{{ vr.edition_label }} <code>{{ vr.edition_key }}</code></td></tr>
+          <tr><th>OS</th><td>{{ vr.os_name }} <small>({{ vr.arch }} / {{ vr.kernel }})</small></td></tr>
+          <tr>
+            <th>Python</th>
+            <td>
+              {{ vr.python }} <small><code>{{ vr.python_path }}</code></small>
+              {% if vr.python_prerelease %}
+                <br><span class="badge badge--off">リリース候補版</span>
+                <small>正式版ではありません。README の「Raspberry Pi 版」を参照してください。</small>
+              {% endif %}
+            </td>
+          </tr>
+          <tr><th>Asterisk</th><td>{{ vr.asterisk or "(取得できませんでした)" }}</td></tr>
+          <tr>
+            <th>ライブラリ</th>
+            <td>
+              {% if vr.lib_mismatch %}
+                <span class="badge badge--off">動作確認版と異なるもの {{ vr.lib_mismatch | length }} 件</span>
+                <ul style="margin:6px 0 0;">
+                  {% for r in vr.lib_mismatch %}
+                    <li><code>{{ r.name }}</code> {{ r.installed }} (確認済み {{ r.locked }})</li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <span class="badge badge--ok">すべて動作確認版と一致</span>
+              {% endif %}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <details style="margin-top:10px;">
+      <summary>全ての版数をテキストで表示 (コピー用)</summary>
+      <pre style="white-space:pre;overflow:auto;font-size:12px;max-height:420px;">{{ vr.as_text() }}</pre>
+    </details>
+  </fieldset>
+
+  <fieldset class="form-section" id="backups">
+    <legend>バックアップ / 復元</legend>
+    <p class="form-hint">
+      内線・トランク・発信/着信ルート等のデータ (<code>pbx.db</code>) と、
+      AMI 接続情報等を含む <code>.env</code> をまとめて zip でバックアップします。
+      サーバー障害時にこれがあれば復旧が大幅に楽になります。
+      <strong>定期的に (設定変更のたびに) 作成し、サーバー外にもダウンロードして保管することを推奨します。</strong>
+    </p>
+
+    {% if backup_error %}
+      <div class="notice notice--warn">
+        <strong>バックアップを作成できませんでした</strong>
+        <pre style="white-space:pre-wrap;margin:0;">{{ backup_error }}</pre>
+      </div>
+    {% endif %}
+
+    <div class="form-row">
+      <form method="post" action="/system/backups/create">
+        <button type="submit" class="btn btn--primary">今すぐバックアップを作成</button>
+      </form>
+    </div>
+
+    {% if backups %}
+    <div class="table-scroll">
+    <table class="data-table" style="margin-top:12px;">
+      <thead>
+        <tr>
+          <th>ファイル名</th>
+          <th>作成日時</th>
+          <th>サイズ</th>
+          <th></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in backups %}
+        <tr>
+          <td class="mono">{{ b.name }}</td>
+          <td>{{ b.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+          <td>{{ (b.size_bytes / 1024) | round(1) }} KB</td>
+          <td><a href="/system/backups/{{ b.name }}/download" class="btn btn--small">ダウンロード</a></td>
+          <td>
+            <form method="post" action="/system/backups/{{ b.name }}/delete"
+                  onsubmit="return confirm('{{ b.name }} を削除しますか?')" style="display:inline">
+              <button type="submit" class="btn btn--small btn--danger">削除</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="form-hint" style="margin-top:12px;">まだバックアップがありません。</p>
+    {% endif %}
+
+    <hr style="margin:20px 0;border:none;border-top:1px solid #e5e7eb;">
+
+    <h4 style="margin:0 0 8px;">復元</h4>
+    <p class="form-hint">
+      ダウンロードした backup_*.zip (または単体の .db ファイル) をアップロードすると、
+      内容を検証してサーバー上の一時領域に展開します。
+      <strong>安全のため、稼働中の pbx.db を自動的には上書きしません。</strong>
+      検証後に表示されるコマンドを実機のターミナルで実行して確定してください。
+    </p>
+    <form method="post" action="/system/backups/restore-stage" enctype="multipart/form-data">
+      <div class="form-row">
+        <input type="file" name="file" accept=".zip,.db" required>
+        <button type="submit" class="btn">アップロードして検証</button>
+      </div>
+    </form>
+
+    {% if restore_error %}
+    <div class="errors" role="alert" style="margin-top:12px;">
+      <strong>復元用ファイルの検証に失敗しました</strong>
+      <p>{{ restore_error }}</p>
+    </div>
+    {% endif %}
+
+    {% if restore_info %}
+    <div style="margin-top:12px;">
+      <p class="form-hint">
+        検証OK (pbx.db{% if restore_info.has_env %} + .env{% endif %} を確認)。
+        以下のコマンドを実機のターミナルで実行して復元を確定してください:
+      </p>
+      <pre style="background:#0d1117;color:#c9d1d9;padding:12px;border-radius:6px;
+           overflow:auto;font-family:monospace;font-size:12px;white-space:pre-wrap;">{{ restore_info.apply_commands }}</pre>
+    </div>
+    {% endif %}
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>Asterisk 本体のバージョン</legend>
+    <p class="form-hint">
+      現在稼働中の Asterisk 本体 (PBXエンジン) のバージョンです。
+      これは本ツール (Web管理画面) のバージョンとは別物です。
+    </p>
+    <div class="form-row">
+      <div class="field">
+        <span class="field__label">現在のバージョン</span>
+        {% if asterisk_version %}
+          <pre style="background:#f6f8fa;padding:8px 12px;border-radius:6px;
+               font-family:monospace;font-size:13px;margin:4px 0 0;">{{ asterisk_version }}</pre>
+        {% else %}
+          <span class="badge badge--off">取得できませんでした</span>
+          <small style="margin-left:8px;color:#666;">
+            Asterisk が起動していないか、本ツールの実行ユーザーから
+            <code>asterisk -rx</code> が実行できない可能性があります。
+          </small>
+        {% endif %}
+      </div>
+    </div>
+
+    <p class="form-hint" style="margin-top:16px;">
+      <strong>本体のアップデートは、安全のためこの画面から自動実行しません。</strong>
+      ソースからの再ビルドには数分〜十数分かかり、完了時に
+      <strong>全通話が切断されます</strong>。また、モジュール選択を誤ると
+      現在使っている機能 (FAX 等) が失われる可能性があります。
+      必ず営業時間外に、SSH 接続した状態で手動実行してください。
+    </p>
+    <pre style="background:#0d1117;color:#c9d1d9;padding:12px;border-radius:6px;
+         overflow:auto;font-family:monospace;font-size:12px;">cd {{ app_root }}
+sudo bash scripts/update_asterisk.sh
+
+# バージョンを指定したい場合:
+sudo ASTERISK_VERSION=22.10.0 bash scripts/update_asterisk.sh</pre>
+    <p class="form-hint">
+      実行前に現在のモジュール一覧・バージョンを <code>/root/asterisk-update-backup/</code>
+      に自動で退避します。詳細は README の「Asterisk 本体のアップデート」を参照してください。
+    </p>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>音声ファイルの場所と確認方法</legend>
+    <p class="form-hint">
+      Asterisk CLI からファイル存在を確認するには:
+    </p>
+    <pre style="background:#f6f8fa;padding:10px;border-radius:6px;
+         font-family:monospace;font-size:12px;">sudo asterisk -rx "core show sounds" | head -10
+ls /var/lib/asterisk/sounds/ja/ | head</pre>
+    <p class="form-hint">
+      日本語音声のテスト再生 (内線から <code>*43</code> でエコーテストに繋がるので、
+      手動で <code>Playback</code> を試したい場合は <code>asterisk -rvv</code>
+      でコンソールに入り <code>dialplan show *43@from-internal</code> 等で
+      確認してください):
+    </p>
+    <pre style="background:#f6f8fa;padding:10px;border-radius:6px;
+         font-family:monospace;font-size:12px;">; extensions.conf で動作確認用エクステンションを足す例
+exten => *99,1,Answer()
+ same => n,Playback(vm-intro)
+ same => n,Hangup()</pre>
+  </fieldset>
+
+</div>
+
+<script>
+// 配布元にライセンス表記が無いため、内容を読んだ上で実行してもらう。
+// チェックが入るまでインストールボタンは押せない。
+function toggleJaInstall() {
+  const ack = document.getElementById('jaLicenseAck');
+  const btn = document.getElementById('installBtn');
+  if (ack && btn) { btn.disabled = !ack.checked; }
+}
+
+async function installJaSounds() {
+  const ack = document.getElementById('jaLicenseAck');
+  if (!ack || !ack.checked) { return; }
+  const btn = document.getElementById('installBtn');
+  const log = document.getElementById('installLog');
+  log.style.display = 'block';
+  log.textContent = '';
+  btn.disabled = true;
+  btn.textContent = 'インストール中…';
+  try {
+    const body = new URLSearchParams({ack: '1'});
+    const resp = await fetch('/system/install-ja-sounds', {method: 'POST', body: body});
+    if (!resp.body) {
+      log.textContent = 'ストリーミング非対応のブラウザです。';
+      return;
+    }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder('utf-8');
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      log.textContent += dec.decode(value, {stream: true});
+      log.scrollTop = log.scrollHeight;
+    }
+    btn.textContent = '完了 (再読み込みで状態更新)';
+    setTimeout(() => window.location.reload(), 2500);
+  } catch (e) {
+    log.textContent += '\nエラー: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = '再試行';
+  }
+}
+</script>
+
+{% endblock %}

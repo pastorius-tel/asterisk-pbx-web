@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_number, field_select, field_toggle, errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+<form id="trunk-form" method="post" action="{{ form_action }}" class="form-grid" autocomplete="off">
+
+  {# ========== プリセット ========== #}
+  <fieldset class="form-section">
+    <legend>プリセット</legend>
+    <p class="form-hint">
+      よく使うトランク種別を選ぶと、必須フィールドに既定値が自動投入されます。
+      投入後は手動で書き換え可能です。
+    </p>
+    <p class="notice notice--warn">
+      <strong>ひかり電話オフィスA (HGW / OG 経由) のプリセットは、
+      実回線での動作検証を行えていません。</strong>
+      NTT の資料と一般的な構成をもとに実装したものです。
+      本番回線に適用する前に、必ず試験環境や予備回線で発着信・FAX・留守番電話の
+      動作をご確認ください。
+    </p>
+    <label class="field">
+      <span class="field__label">プリセット選択</span>
+      <select id="preset-select" class="field__select">
+        {% for p in preset_choices %}
+          <option value="{{ p.value }}">{{ p.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div id="preset-hint"></div>
+  </fieldset>
+
+  {# ========== 基本情報 ========== #}
+  <fieldset class="form-section">
+    <legend>基本情報</legend>
+    <div class="form-row">
+      {{ field_text("name", "トランク名", item=item, submitted=submitted, required=True,
+                    pattern="[A-Za-z0-9_\\-]+", placeholder="hikari_main",
+                    help="英数 / _ / - のみ。pjsip.conf のセクション名になります。") }}
+      {{ field_select("trunk_type", "認証方式", trunk_types,
+                      item=item, submitted=submitted, default="register", required=True) }}
+    </div>
+    <div class="form-row">
+      {{ field_text("host", "接続先ホスト", item=item, submitted=submitted, required=True,
+                    placeholder="192.168.1.1",
+                    help="ひかり電話の場合は HGW の LAN 側 IP。") }}
+      {{ field_number("port", "ポート", item=item, submitted=submitted, default=5060,
+                      min=1, max=65535, required=True) }}
+    </div>
+    <div class="form-row">
+      {{ field_select("transport", "トランスポート", transports,
+                      item=item, submitted=submitted, default="udp", required=True) }}
+      {{ field_number("max_channels", "同時通話数", item=item, submitted=submitted, default=10,
+                      min=0, max=10000,
+                      help="0 で無制限。ひかり電話オフィスA は契約 ch 数を設定。") }}
+    </div>
+  </fieldset>
+
+  {# ========== 認証 ========== #}
+  <fieldset class="form-section">
+    <legend>認証</legend>
+    <p class="form-hint">
+      <strong>ひかり電話オフィスA は「HGW/OG 内線番号 (1〜2 桁)」と「認証ユーザID (4 桁)」が別物</strong>です。
+      両方とも HGW/OG の管理画面で確認できます。
+    </p>
+    <div class="form-row">
+      {{ field_text("hgw_extension_number", "HGW/OG 内線番号 (1〜2桁)",
+                    item=item, submitted=submitted, monospace=True,
+                    pattern="\\d{1,4}", placeholder="3",
+                    help="HGW/OG「電話設定→内線設定」の内線番号 (例: 3, 10)。ひかり電話オフィスA で必須。") }}
+      {{ field_text("username", "認証ユーザID (4桁)",
+                    item=item, submitted=submitted, monospace=True,
+                    placeholder="0003",
+                    help="HGW/OG が割り当てるユーザID (内線番号 3 → ユーザID 0003 など)。") }}
+    </div>
+    {{ field_text("secret", "パスワード", item=item, submitted=submitted,
+                  monospace=True, type="password",
+                  help="HGW/OG で設定した端末パスワード。MAC 認証時は空欄可。") }}
+    <div class="form-row">
+      {{ field_toggle("use_mac_auth", "MAC アドレス認証を使う",
+                      item=item, submitted=submitted, default=False,
+                      help="OG 等で MAC 認証のみで運用する場合に ON (パスワードなし)。") }}
+      {{ field_text("auth_username", "認証 ID (上書き、通常空)",
+                    item=item, submitted=submitted, monospace=True,
+                    help="認証 ID がユーザID と異なる場合のみ。") }}
+    </div>
+  </fieldset>
+
+  {# ========== 番号設定 ========== #}
+  <fieldset class="form-section">
+    <legend>電話番号 / 発信者番号</legend>
+    {{ field_text("outbound_caller_id", "主番号 (発信時の番号)",
+                  item=item, submitted=submitted, monospace=True, placeholder="0312345678",
+                  help="From ヘッダで通知される契約電話番号。ひかり電話では契約番号と一致必須。") }}
+    {{ field_text("additional_did_numbers", "追加番号 (カンマ区切り)",
+                  item=item, submitted=submitted, monospace=True,
+                  placeholder="0312345679,0312345680",
+                  help="ひかり電話の追加番号 / マイナンバー。空欄可。8〜15 桁の数字をカンマ区切り。") }}
+    <div class="form-row">
+      {{ field_text("from_user", "From ユーザー (上書き)",
+                    item=item, submitted=submitted, monospace=True,
+                    help="未指定で「主番号」を使用。") }}
+      {{ field_text("from_domain", "From ドメイン (上書き)",
+                    item=item, submitted=submitted,
+                    help="未指定で接続先ホスト。") }}
+    </div>
+  </fieldset>
+
+  {# ========== メディア ========== #}
+  <fieldset class="form-section">
+    <legend>メディア</legend>
+    <div class="form-row">
+      {{ field_select("codec_primary", "コーデック (第 1)", codecs,
+                      item=item, submitted=submitted, default="ulaw", required=True,
+                      help="ひかり電話は G.711 μ-law 必須。") }}
+      {{ field_select("codec_secondary", "コーデック (第 2)", codecs,
+                      item=item, submitted=submitted, allow_empty=True) }}
+    </div>
+    <div class="form-row">
+      {{ field_select("dtmf_mode", "DTMF モード", dtmf_modes,
+                      item=item, submitted=submitted, default="rfc4733", required=True,
+                      help="外線から IVR のキー入力 (プッシュ番号) が反応しない場合は inband に、それでも駄目なら auto に変更してみてください。ひかり電話ではこれが必要になることがあります。inband を使う場合はコーデックに ulaw か alaw を含めてください (トーンが音声に混ざる方式のため、圧縮コーデックだと検出できません)。") }}
+      {{ field_select("nat_mode", "NAT モード", nat_modes,
+                      item=item, submitted=submitted, default="force_rport,comedia", required=True,
+                      help="HGW と同 LAN なら no、外部 SIP なら force_rport,comedia。") }}
+    </div>
+  </fieldset>
+
+  {# ========== NTT 系オプション ========== #}
+  <fieldset class="form-section">
+    <legend>NTT 系オプション</legend>
+    <p class="form-hint">
+      <strong>HGW 経由のひかり電話オフィスA では、下記はすべて OFF が標準</strong>です
+      (HGW が CID 処理を引き受けるため)。<br>
+      ON にすると逆に発信が止まったり、Via ヘッダがおかしくなる場合があります。
+    </p>
+    <div class="form-row">
+      {{ field_toggle("disable_rport", "[system] disable_rport を有効化",
+                      item=item, submitted=submitted, default=False,
+                      help="OG 配下/直収で発信時 400 Bad Request が出るときに ON。Via に rport が入らなくなる。") }}
+      {{ field_toggle("trust_id_inbound", "trust_id_inbound (着信 CID 信頼)",
+                      item=item, submitted=submitted, default=False,
+                      help="ONU 直収時のみ ON。HGW/OG 経由では不要。") }}
+    </div>
+    <div class="form-row">
+      {{ field_toggle("send_pai", "send_pai (発信 CID を P-A-I で送出)",
+                      item=item, submitted=submitted, default=False,
+                      help="ONU 直収時のみ ON。HGW/OG 経由では不要。") }}
+    </div>
+  </fieldset>
+
+  {# ========== 運用 ========== #}
+  <fieldset class="form-section">
+    <legend>運用</legend>
+    <div class="form-row">
+      {{ field_toggle("qualify", "OPTIONS で死活監視",
+                      item=item, submitted=submitted, default=True) }}
+      {{ field_toggle("enabled", "このトランクを有効化",
+                      item=item, submitted=submitted, default=True) }}
+    </div>
+    {{ field_text("note", "メモ", item=item, submitted=submitted) }}
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/trunks/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+
+{# プリセットは presets.py の固定データだが、|safe で生の HTML として
+   出力すると、将来ここにユーザー入力由来の値が混ざったときに
+   </script> で抜けられる。Jinja の tojson は < > & ' をエスケープする
+   ため、そのまま <script> 内に置いても安全。 #}
+<script id="presets-data" type="application/json">{{ presets|tojson }}</script>
+<script>
+(function () {
+  const presets = JSON.parse(document.getElementById('presets-data').textContent);
+  const sel = document.getElementById('preset-select');
+  const hint = document.getElementById('preset-hint');
+  const form = document.getElementById('trunk-form');
+
+  const HINTS = {
+    'hikari_office_a_hgw':
+      '<strong>※ 実回線での動作検証は行えていません。試験環境で確認してください。</strong><br><br>' +
+      '<strong>HGW (PR-500/600 系) の管理画面 (http://ntt.setup) で:</strong><br>' +
+      '① 「電話設定→内線設定」で IP 端末を追加<br>' +
+      '② ダイジェスト認証を「行う」にしてユーザID/パスワードを設定<br>' +
+      '③ 「着信番号設定」でその内線に主番号・追加番号を割り当て<br>' +
+      '<br>このフォームには <em>HGW 内線番号</em> (1桁)、<em>ユーザID</em> (4桁)、<em>パスワード</em> の 3 つを正しく入力。',
+    'hikari_office_a_og':
+      '<strong>※ 実回線での動作検証は行えていません。試験環境で確認してください。</strong><br><br>' +
+      '<strong>OG (OG410Xa/420Xa/820Xa) の管理画面 (http://ntt.setup) で:</strong><br>' +
+      '① 「電話設定→IP端末/GW収容設定」で Asterisk サーバの MAC アドレスを登録<br>' +
+      '② 内線番号 (通常 10〜99) を採番、ダイジェスト認証を「行う」に設定<br>' +
+      '③ 「着信番号設定」でその内線に主番号・追加番号を割り当て<br>' +
+      '<br>発信が 400 Bad Request になる場合は「disable_rport を有効化」を ON に。',
+    'register_generic':
+      'ITSP から払い出された SIP アカウント (ユーザー名/パスワード) を入力。',
+    'peer_generic':
+      'IP 認証のみ。固定 IP の対向 PBX や閉域網トランクで使用。',
+  };
+
+  sel.addEventListener('change', () => {
+    const key = sel.value;
+    hint.innerHTML = HINTS[key]
+      ? '<div class="preset-hint__box">' + HINTS[key] + '</div>'
+      : '';
+    if (!key || !presets[key]) return;
+    if (!confirm('プリセットを適用すると、現在の入力値が上書きされます。続行しますか?')) {
+      sel.value = '';
+      return;
+    }
+    const preset = presets[key];
+    for (const [name, value] of Object.entries(preset)) {
+      const els = form.elements[name];
+      if (!els) continue;
+      if (els.type === 'checkbox') {
+        els.checked = !!value;
+      } else if (els.tagName === 'SELECT' || els.tagName === 'INPUT') {
+        els.value = value === null ? '' : value;
+      }
+    }
+  });
+})();
+</script>
+
+<style>
+.preset-hint__box {
+  background: #fef9e7;
+  border: 1px solid #f0d878;
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: #6b5300;
+  line-height: 1.7;
+}
+</style>
+{% endblock %}

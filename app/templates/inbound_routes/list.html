@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/inbound-routes/new" class="btn btn--primary">+ 着信ルートを追加</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="form-hint">
+  外線からの着信 (DID) を内線・ボイスメール・FAX・IVR などに振り分けます。
+  優先度が小さいものから順に評価され、DID 番号が一致したルートが使われます。
+  DID 番号が空のルートは「すべての着信」(キャッチオール) になります。
+</div>
+
+{% if not items %}
+<div class="empty">
+  <p>着信ルートが登録されていません。</p>
+  <p class="empty__hint">「着信ルートを追加」から設定してください。</p>
+  <a href="/inbound-routes/new" class="btn btn--primary">追加する</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>優先</th>
+      <th>名前</th>
+      <th>着信番号 (DID)</th>
+      <th>転送先</th>
+      <th>応答なし時</th>
+      <th>状態</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td class="mono">{{ it.priority }}</td>
+      <td><strong>{{ it.name }}</strong></td>
+      <td class="mono">{{ it.did_number or "（すべて）" }}</td>
+      <td>
+        {% set dt = it.destination_type %}
+        {% if dt == "extension" %}内線 {{ it.destination_value }}
+        {% elif dt == "voicemail" %}ボイスメール {{ it.destination_value }}
+        {% elif dt == "fax" %}FAX 受信
+        {% elif dt == "ivr" %}IVR #{{ it.destination_value }}
+        {% elif dt == "queue" %}キュー #{{ it.destination_value }}
+        {% elif dt == "ring_group" %}リンググループ #{{ it.destination_value }}
+        {% elif dt == "hangup" %}切断
+        {% elif dt == "time_condition" %}時間条件 #{{ it.destination_value }}
+        {% else %}{{ dt }} {{ it.destination_value }}{% endif %}
+      </td>
+      <td class="mono compact">
+        {%- if it.destination_type == "extension" -%}
+          {%- if it.no_answer_type == "voicemail" -%}
+            VM→{{ it.no_answer_value }}
+          {%- elif it.no_answer_type == "extension" -%}
+            内線→{{ it.no_answer_value }}
+          {%- elif it.no_answer_type == "hangup" -%}
+            切断
+          {%- else -%}—{%- endif -%}
+        {%- else -%}—{%- endif -%}
+      </td>
+      <td>
+        {% if it.enabled %}<span class="badge badge--ok">有効</span>
+        {% else %}<span class="badge badge--off">無効</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/inbound-routes/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/inbound-routes/{{ it.id }}/delete"
+              onsubmit="return confirm('着信ルート {{ it.name }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/time-conditions/new" class="btn btn--primary">+ 時間条件を追加</a>
+{% endblock %}
+
+{% block content %}
+
+<p class="form-hint">
+  営業時間の内か外かで、着信の転送先を自動的に切り替えます。
+  着信ルート・リンググループの応答なし時・IVR 等の転送先で
+  「時間条件」を選ぶと使えます。曜日ごとのパターンは
+  <a href="/day-patterns/">日次パターン</a>、祝日・盆休み等は
+  <a href="/calendar-exceptions/">カレンダー例外</a> の画面で管理します。
+</p>
+
+{% if not items %}
+<div class="empty">
+  <p>時間条件がありません。</p>
+  <p class="empty__hint">
+    例: 平日は内線へ、それ以外はボイスメールへ転送したい場合、
+    先に「日次パターン」で「平日」パターンを作成してから、
+    ここで新規作成してください。
+  </p>
+  <a href="/time-conditions/new" class="btn btn--primary">時間条件を追加</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>名前</th>
+      <th>月〜金</th>
+      <th>土</th>
+      <th>日</th>
+      <th>カレンダー例外</th>
+      <th>時間内 →</th>
+      <th>時間外 →</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td>{{ it.name }}</td>
+      <td class="mono">{{ it.mon_pattern.display_name if it.mon_pattern else "休" }}</td>
+      <td class="mono">{{ it.sat_pattern.display_name if it.sat_pattern else "休" }}</td>
+      <td class="mono">{{ it.sun_pattern.display_name if it.sun_pattern else "休" }}</td>
+      <td>
+        {% if it.use_calendar_exceptions %}<span class="badge badge--ok">考慮する</span>
+        {% else %}<span class="badge">考慮しない</span>{% endif %}
+      </td>
+      <td class="mono">{{ it.inside_type }}{% if it.inside_type != "hangup" %}: {{ it.inside_value }}{% endif %}</td>
+      <td class="mono">{{ it.outside_type }}{% if it.outside_type != "hangup" %}: {{ it.outside_value }}{% endif %}</td>
+      <td>
+        {% if it.enabled %}<span class="badge badge--ok">有効</span>
+        {% else %}<span class="badge badge--off">無効</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/time-conditions/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/time-conditions/{{ it.id }}/delete"
+              onsubmit="return confirm('時間条件 {{ it.name }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

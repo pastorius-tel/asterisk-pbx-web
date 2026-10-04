@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/ring-groups/new" class="btn btn--primary">+ リンググループを追加</a>
+{% endblock %}
+
+{% block content %}
+
+<p class="form-hint">
+  複数の内線をまとめて呼び出すグループです。着信ルートの転送先で
+  「リンググループ」を選ぶと、外線着信時にここで選んだ内線が一斉 (または順番) に鳴ります。
+</p>
+
+{% if not items %}
+<div class="empty">
+  <p>リンググループがありません。</p>
+  <p class="empty__hint">
+    例: 外線着信で内線 201・202 の両方を同時に鳴らしたい場合、
+    ここで新規作成してメンバーにチェックを入れてください。
+  </p>
+  <a href="/ring-groups/new" class="btn btn--primary">リンググループを追加</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>番号</th>
+      <th>名前</th>
+      <th>戦略</th>
+      <th>メンバー</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td class="mono">{{ it.group_number }}</td>
+      <td>{{ it.name }}</td>
+      <td class="mono">{{ it.strategy }}</td>
+      <td>{{ it.members|map(attribute='extension')|join(', ') }}</td>
+      <td>
+        {% if it.enabled %}<span class="badge badge--ok">有効</span>
+        {% else %}<span class="badge badge--off">無効</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/ring-groups/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/ring-groups/{{ it.id }}/delete"
+              onsubmit="return confirm('リンググループ {{ it.name }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

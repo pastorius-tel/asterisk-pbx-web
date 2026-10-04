@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_select, field_toggle, errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+<form method="post" action="{{ form_action }}" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>基本</legend>
+    <div class="form-row">
+      {{ field_text("class_name", "クラス名 (英数_)", item=item, submitted=submitted, required=True,
+                    pattern="[A-Za-z0-9_]+", monospace=True,
+                    help="musiconhold.conf のセクション名。") }}
+      {{ field_text("display_name", "表示名", item=item, submitted=submitted, required=True,
+                    placeholder="昼間営業中") }}
+    </div>
+    <div class="form-row">
+      {{ field_select("sort_mode", "再生順", moh_sort_modes,
+                      item=item, submitted=submitted, required=True) }}
+      {{ field_toggle("is_default", "default として扱う",
+                      item=item, submitted=submitted, default=False,
+                      help="指定保留音がない発信時に流れる既定音源。") }}
+    </div>
+    <div class="form-row">
+      {{ field_toggle("enabled", "有効化", item=item, submitted=submitted, default=True) }}
+    </div>
+    {{ field_text("note", "メモ", item=item, submitted=submitted) }}
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>含める音源 (カテゴリ: moh) </legend>
+    {% if not audio_choices %}
+      <p class="form-hint">音源 (カテゴリ moh) が登録されていません。先に <a href="/audio/new">音源をアップロード</a> してください。</p>
+    {% else %}
+    <div class="preset-grid">
+      {% for opt in audio_choices %}
+        <label class="chip chip--check" style="cursor:pointer">
+          <input type="checkbox" name="audio_file_ids" value="{{ opt.value }}"
+                 {% if opt.value|int in selected_audio_ids %}checked{% endif %}
+                 style="margin-right:6px">
+          {{ opt.label }}
+        </label>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/moh-classes/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+{% endblock %}

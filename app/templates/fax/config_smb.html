@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/fax/config" class="btn">← FAX 設定へ戻る</a>
+{% endblock %}
+
+{% block content %}
+
+{% if test_msg %}
+<div class="form-hint" style="padding:10px;border-radius:6px;
+  {% if test_ok %}background:#d1e7dd;border:1px solid #a3cfbb;
+  {% else %}background:#f8d7da;border:1px solid #f1aeb5;{% endif %}">
+  <strong>SMB 接続テスト:</strong> {{ test_msg }}
+</div>
+{% endif %}
+
+<p class="form-hint">
+  受信 FAX の PDF を Windows 共有 / NAS (SMB/CIFS) に保存します。
+  例: <code>\\192.168.1.10\share\FAX</code> に保存する場合は
+  サーバー <code>192.168.1.10</code> / 共有名 <code>share</code> /
+  パス <code>FAX</code> と入力します。
+</p>
+
+<form method="post" action="/fax/config/smb" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>SMB 接続先</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">サーバー (ホスト名 / IP)</span>
+        <input class="field__input field__input--mono" name="smb_server"
+               value="{{ cfg.smb_server or '' }}" placeholder="192.168.1.10">
+      </label>
+      <label class="field">
+        <span class="field__label">ポート</span>
+        <input class="field__input field__input--mono" name="smb_port" type="number"
+               value="{{ cfg.smb_port or 445 }}">
+        <small class="field__help">通常は 445。</small>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">共有名</span>
+        <input class="field__input field__input--mono" name="smb_share"
+               value="{{ cfg.smb_share or '' }}" placeholder="share">
+        <small class="field__help">\\サーバー\<strong>共有名</strong> の部分。</small>
+      </label>
+      <label class="field">
+        <span class="field__label">保存先サブフォルダ</span>
+        <input class="field__input field__input--mono" name="smb_path"
+               value="{{ cfg.smb_path or '' }}" placeholder="FAX">
+        <small class="field__help">共有内のフォルダ。空なら共有直下。存在しなければ自動作成。</small>
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>認証</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">ユーザー名</span>
+        <input class="field__input field__input--mono" name="smb_username"
+               value="{{ cfg.smb_username or '' }}" placeholder="faxuser" autocomplete="off">
+      </label>
+      <label class="field">
+        <span class="field__label">パスワード</span>
+        <input class="field__input field__input--mono" name="smb_password" type="password"
+               placeholder="{% if cfg.smb_password %}（変更時のみ入力）{% else %}パスワード{% endif %}"
+               autocomplete="new-password">
+        <small class="field__help">空欄のまま保存すると既存パスワードを保持します。</small>
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">ドメイン / ワークグループ (任意)</span>
+        <input class="field__input field__input--mono" name="smb_domain"
+               value="{{ cfg.smb_domain or '' }}" placeholder="WORKGROUP">
+        <small class="field__help">Active Directory ドメインに参加した共有の場合のみ。通常は空でOK。</small>
+      </label>
+    </div>
+  </fieldset>
+
+  <div class="form-foot">
+    <button type="submit" class="btn btn--primary">外部保存設定を保存</button>
+    <button type="submit" formaction="/fax/config/smb/test" formmethod="post"
+            class="btn">SMB 接続テスト</button>
+  </div>
+</form>
+
+<p class="form-hint" style="margin-top:16px;">
+  保存ファイル名は <code>受信FAX_YYYYMMDD_HHMM_着信番号.pdf</code> です。
+  この設定を有効にするには、FAX 設定画面で
+  「外部サーバー (SMB) に PDF 保存する」にチェックを入れてください。
+</p>
+
+{% endblock %}

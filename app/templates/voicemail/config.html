@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/voicemail/" class="btn">一覧へ戻る</a>
+{% endblock %}
+
+{% block content %}
+
+<form method="post" action="/voicemail/config" class="form-grid" autocomplete="off">
+  <fieldset class="form-section">
+    <legend>ファイル名設定</legend>
+    <p class="form-hint">
+      Asterisk 自体の保存ファイル名 (<code>msgNNNN.wav</code>) は仕様上
+      変更できませんが、ここで設定したパターンは、Web 画面から
+      「再生」「ダウンロード」する際に見えるファイル名にだけ適用されます。
+    </p>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">ファイル名パターン</span>
+        <input class="field__input field__input--mono" name="voicemail_filename_pattern"
+               value="{{ app_settings.voicemail_filename_pattern or '{extension}_{datetime}' }}">
+      </label>
+      <label class="field">
+        <span class="field__label">日時の書式</span>
+        <input class="field__input field__input--mono" name="voicemail_datetime_format"
+               value="{{ app_settings.voicemail_datetime_format or '%Y%m%d_%H%M%S' }}">
+        <small class="field__help">
+          Python の strftime 書式。例: %Y%m%d_%H%M%S → 20260817_103005
+        </small>
+      </label>
+    </div>
+    <p class="form-hint">
+      ファイル名パターンで使えるプレースホルダー:
+      <code>{extension}</code> (内線番号) / <code>{datetime}</code> (上記書式で整形した録音日時)。
+      拡張子 <code>.wav</code> は自動で付きます。ファイル名に使えない文字は自動的に
+      <code>_</code> に置き換わります。
+    </p>
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>メール通知</legend>
+    <p class="form-hint">
+      留守番電話の通知メールは Asterisk 自身ではなく本ツールが送信します
+      (SMTP 接続情報は「FAX 送受信」→「設定」→「メール設定」と共通です。
+      未設定の場合はそちらを先に設定してください)。件名・本文は自由に
+      カスタマイズできます。宛先アドレス・添付有無・送信後の録音削除は、
+      内線ごとに「内線」編集画面で設定してください。
+    </p>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">件名テンプレート</span>
+        <input class="field__input" name="voicemail_mail_subject_template"
+               value="{{ app_settings.voicemail_mail_subject_template or '[留守番電話] {extension} 様へ新着メッセージ' }}">
+      </label>
+    </div>
+    <label class="field">
+      <span class="field__label">本文テンプレート</span>
+      <textarea class="field__input field__input--mono" name="voicemail_mail_body_template"
+                rows="8">{{ app_settings.voicemail_mail_body_template }}</textarea>
+      <small class="field__help">
+        使えるプレースホルダー: <code>{extension}</code> (内線番号) /
+        <code>{caller}</code> (発信者番号) / <code>{datetime}</code>
+        (受信日時、例「2026年8月18日 午後6時25分35秒」の日本語形式で
+        固定生成されます) / <code>{duration}</code> (長さ)。
+        空欄のまま保存すると変更されません。
+      </small>
+    </label>
+  </fieldset>
+
+  <div class="form-foot">
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+
+{% endblock %}

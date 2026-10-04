@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_number, field_select, field_toggle, errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+{% if no_patterns %}
+<div class="empty">
+  <p>先に「日次パターン」を作成してください。</p>
+  <p class="empty__hint">
+    カレンダー例外には、その期間に適用するパターン (通常は「終日休業」)
+    が必要です。
+  </p>
+  <a href="/day-patterns/new" class="btn btn--primary">日次パターンを追加</a>
+</div>
+{% else %}
+
+<form method="post" action="{{ form_action }}" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>基本情報</legend>
+    {{ field_text("name", "名前", item=item, submitted=submitted, required=True,
+                  placeholder="盆休み") }}
+    <div class="form-row">
+      {{ field_toggle("enabled", "有効化", item=item, submitted=submitted, default=True) }}
+    </div>
+    {{ field_text("note", "メモ", item=item, submitted=submitted) }}
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>期間 (カレンダーから選択)</legend>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">開始日<em class="req">*</em></span>
+        <input class="field__input" type="date" name="start_date" required
+               value="{{ start_date_value or (submitted.start_date if submitted else '') }}">
+      </label>
+      <label class="field">
+        <span class="field__label">終了日<em class="req">*</em></span>
+        <input class="field__input" type="date" name="end_date" required
+               value="{{ end_date_value or (submitted.end_date if submitted else '') }}">
+      </label>
+    </div>
+    <div class="form-row">
+      <label class="field field--toggle">
+        <span class="field__label">毎年繰り返す</span>
+        <span class="toggle">
+          <input type="checkbox" name="recurring"
+                 {% if submitted %}{% if submitted.recurring %}checked{% endif %}{% elif not item or not item.year %}checked{% endif %}>
+          <span class="toggle__track"><span class="toggle__thumb"></span></span>
+          <span class="toggle__hint">
+            {% if submitted %}{{ "有効" if submitted.recurring else "無効" }}{% elif not item or not item.year %}有効{% else %}無効{% endif %}
+          </span>
+        </span>
+      </label>
+    </div>
+    <p class="form-hint">
+      「毎年繰り返す」を有効にすると、選択した日付の「月日」だけを使い
+      (年は無視され)、年末年始・盆休みのように毎年ほぼ同じ日付で
+      発生する休業日に使えます。無効にすると、選択した年にのみ適用
+      されます (成人の日など、年によって日付が変わる祝日向け)。
+      終了日が開始日より前の場合 (例: 12/29 〜 1/3)、年をまたぐ期間
+      として扱われます。
+    </p>
+    {{ field_number("priority", "優先度", item=item, submitted=submitted, default=100,
+                    min=0, max=1000,
+                    help="複数のカレンダー例外の期間が重なった場合、値が小さいほうが優先されます。") }}
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>適用パターン</legend>
+    {{ field_select("pattern_id", "この期間に適用するパターン", pattern_choices,
+                    item=item, submitted=submitted, required=True,
+                    help="通常は「終日休業」パターンを選びます。半日休業などにも対応できます。") }}
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/calendar-exceptions/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

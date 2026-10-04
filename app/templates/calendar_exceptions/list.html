@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/calendar-exceptions/new" class="btn btn--primary">+ カレンダー例外を追加</a>
+{% endblock %}
+
+{% block content %}
+
+<p class="form-hint">
+  祝日・盆休み・年末年始など、特定の日付に通常の曜日設定を上書きして
+  適用するパターンです。「時間条件」画面で「カレンダー例外を考慮する」
+  が有効な場合、全ての時間条件がここでの設定を自動的に考慮します。
+  「毎年繰り返す」を選ぶと、年を気にせず一度設定するだけで毎年
+  自動的に適用されます。
+</p>
+
+{% if not items %}
+<div class="empty">
+  <p>カレンダー例外がありません。</p>
+  <p class="empty__hint">
+    例: 盆休み (8/13〜8/16、毎年繰り返す) や年末年始 (12/29〜1/3、
+    毎年繰り返す) を「終日休業」パターンで登録してください。
+    日付が年によって変わる祝日 (成人の日など) は、「この年のみ」を
+    選んで年ごとに登録してください。
+  </p>
+  <a href="/calendar-exceptions/new" class="btn btn--primary">カレンダー例外を追加</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>優先度</th>
+      <th>名前</th>
+      <th>期間</th>
+      <th>繰り返し</th>
+      <th>適用パターン</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td class="mono">{{ it.priority }}</td>
+      <td>{{ it.name }}</td>
+      <td class="mono">{{ fmt_md(it.start_month, it.start_day) }} 〜 {{ fmt_md(it.end_month, it.end_day) }}</td>
+      <td>
+        {% if it.year %}<span class="badge">{{ it.year }}年のみ</span>
+        {% else %}<span class="badge badge--ok">毎年繰り返す</span>{% endif %}
+      </td>
+      <td>{{ it.pattern.display_name if it.pattern else "-" }}</td>
+      <td>
+        {% if it.enabled %}<span class="badge badge--ok">有効</span>
+        {% else %}<span class="badge badge--off">無効</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/calendar-exceptions/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/calendar-exceptions/{{ it.id }}/delete"
+              onsubmit="return confirm('カレンダー例外 {{ it.name }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

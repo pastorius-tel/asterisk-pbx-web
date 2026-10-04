@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "partials/_macros.html" import field_text, field_number, field_select, field_toggle, errors_block %}
+
+{% block content %}
+{{ errors_block(errors) }}
+
+<form method="post" action="{{ form_action }}" class="form-grid" autocomplete="off">
+
+  <fieldset class="form-section">
+    <legend>基本情報</legend>
+    <div class="form-row">
+      {{ field_text("queue_number", "キュー番号", item=item, submitted=submitted, required=True,
+                    placeholder="700", pattern="\\d{2,16}", monospace=True,
+                    help="このキューを識別する仮想番号。内線・リンググループ番号と重複しないようにしてください。") }}
+      {{ field_text("name", "名前", item=item, submitted=submitted, required=True,
+                    placeholder="サポート窓口") }}
+    </div>
+    <div class="form-row">
+      {{ field_select("strategy", "呼出戦略", queue_strategies,
+                      item=item, submitted=submitted, default="ringall", required=True) }}
+      {{ field_number("timeout", "1人あたりの呼出秒数", item=item, submitted=submitted, default=15,
+                      min=5, max=300, help="この秒数鳴らして応答がなければ次のメンバーへ (戦略による)。") }}
+    </div>
+    <div class="form-row">
+      {{ field_number("retry", "再試行までの秒数", item=item, submitted=submitted, default=5,
+                      min=0, max=300, help="一度応答が無かったメンバーに、再度呼び出すまでの待機秒数。") }}
+      {{ field_number("wrapuptime", "後処理時間 (秒)", item=item, submitted=submitted, default=0,
+                      min=0, max=600, help="通話終了後、そのメンバーに次の呼を回さない待機時間。") }}
+    </div>
+    <div class="form-row">
+      {{ field_number("maxlen", "最大待ち人数", item=item, submitted=submitted, default=0,
+                      min=0, max=100, help="0 で無制限。上限に達すると、以降の着信は「メンバー不在時」と同じ扱いで転送先に回ります。") }}
+      {{ field_text("music_class", "保留音クラス", item=item, submitted=submitted, default="default",
+                    placeholder="default", monospace=True,
+                    help="「保留音クラス」画面で作成したクラス名。未作成なら default のままで構いません。") }}
+    </div>
+    <div class="form-row">
+      {{ field_toggle("enabled", "有効化", item=item, submitted=submitted, default=True) }}
+    </div>
+    {{ field_text("note", "メモ", item=item, submitted=submitted) }}
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>所属メンバー (内線)</legend>
+    <p class="form-hint">
+      チェックを入れた内線が、このキューのメンバー (エージェント) になります。
+      空のままでも保存できますが、メンバーが 1 人もいない (または全員が
+      通話中) 間は、着信は下記の「メンバー不在時の転送先」へ回ります。
+    </p>
+    {% if not ext_choices %}
+      <p class="form-hint">内線が登録されていません。先に <a href="/extensions/new">内線を追加</a> してください。</p>
+    {% else %}
+    <div class="preset-grid">
+      {% for opt in ext_choices %}
+        <label class="chip chip--check" style="cursor:pointer">
+          <input type="checkbox" name="member_extensions" value="{{ opt.value }}"
+                 {% if opt.value in selected_members %}checked{% endif %}
+                 style="margin-right:6px">
+          {{ opt.label }}
+        </label>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </fieldset>
+
+  <fieldset class="form-section">
+    <legend>メンバー不在時の転送先</legend>
+    <p class="form-hint">
+      メンバーが 1 人もいない・全員一時停止中・最大待ち人数を超えた
+      場合の転送先です (空欄なら切断)。
+    </p>
+    <div class="form-row">
+      <label class="field">
+        <span class="field__label">種別</span>
+        <select class="field__select" name="fallback_type" id="fallback_type">
+          <option value="" {% if not (item and item.fallback_type) and not (submitted and submitted.fallback_type) %}selected{% endif %}>指定なし (切断)</option>
+          <option value="voicemail" {% if (item and item.fallback_type == "voicemail") or (submitted and submitted.fallback_type == "voicemail") %}selected{% endif %}>ボイスメール</option>
+          <option value="extension" {% if (item and item.fallback_type == "extension") or (submitted and submitted.fallback_type == "extension") %}selected{% endif %}>他の内線</option>
+          <option value="hangup" {% if (item and item.fallback_type == "hangup") or (submitted and submitted.fallback_type == "hangup") %}selected{% endif %}>切断</option>
+        </select>
+      </label>
+      {{ field_select("fallback_value", "転送先", vm_choices,
+                      item=item, submitted=submitted, allow_empty=True,
+                      help="種別が「ボイスメール」または「他の内線」のとき、対象の内線番号を選択。") }}
+    </div>
+  </fieldset>
+
+  <div class="form-foot">
+    <a href="/queues/" class="btn">キャンセル</a>
+    <button type="submit" class="btn btn--primary">保存</button>
+  </div>
+</form>
+{% endblock %}

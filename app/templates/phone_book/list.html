@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{% if message %}
+<div class="{% if ok == '0' %}errors{% else %}notice{% endif %}" role="alert">
+  <strong>{{ message }}</strong>
+</div>
+{% endif %}
+
+<p class="form-hint">
+  よく使う相手先を登録できます。<strong>短縮番号</strong>を割り当てると、
+  電話機から <code>{{ prefix }}</code> + 短縮番号 でダイヤルして発信できます
+  (短縮番号 <code>01</code> なら <code>{{ prefix }}01</code>)。<br>
+  短縮番号は 2〜3 桁の数字で、重複しないように付けてください。
+  空欄にすると電話帳への登録だけになります
+  (<code>*8</code> パーク取得・<code>*43</code> エコー・<code>*97</code>
+  留守番電話などの特番と衝突しないよう、短縮ダイヤルには
+  <code>{{ prefix }}</code> を使っています)。
+</p>
+<p class="form-hint">
+  発着信履歴の「⋯」からも、その番号をここへ登録できます
+  (そちらで登録した場合、<strong>短縮番号は未設定</strong>なので、
+  短縮発信したい場合はこの画面で番号を入れてください)。
+  一番下の空行に入力すると新規追加になります。
+</p>
+
+{% set has_speed = items | selectattr("speed_dial") | list %}
+{% if items and not has_speed %}
+<div class="errors" role="alert">
+  <strong>短縮番号が 1 件も設定されていません。</strong>
+  <p>
+    このままでは電話機からの短縮発信 (<code>{{ prefix }}</code> + 番号) は
+    使えません。下の表の「短縮番号」欄に <code>01</code> のような
+    2〜3 桁の数字を入れて保存してください。
+  </p>
+</div>
+{% endif %}
+
+<form method="post" action="/phone-book/save">
+  <div style="overflow-x:auto">
+  <table class="data-table table--slim">
+    <thead>
+      <tr>
+        <th style="min-width:80px">短縮番号</th>
+        <th style="min-width:150px">名前</th>
+        <th style="min-width:140px">電話番号</th>
+        <th style="min-width:130px">よみがな</th>
+        <th style="min-width:130px">会社・部署</th>
+        <th style="min-width:50px">有効</th>
+        <th style="min-width:60px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      <tr>
+        <td>
+          <input type="hidden" name="e_id" value="{{ it.id }}">
+          <input class="field__input field__input--mono" type="text" name="e_speed"
+                 value="{{ it.speed_dial or '' }}" pattern="\d{2,3}" maxlength="3"
+                 placeholder="01" title="2〜3桁の数字">
+          {% if it.speed_dial %}
+          <br><small class="field__help mono">{{ prefix }}{{ it.speed_dial }}</small>
+          {% endif %}
+        </td>
+        <td><input class="field__input" type="text" name="e_name" value="{{ it.name }}"></td>
+        <td><input class="field__input field__input--mono" type="text" name="e_number" value="{{ it.number }}"></td>
+        <td><input class="field__input" type="text" name="e_kana" value="{{ it.kana or '' }}"></td>
+        <td><input class="field__input" type="text" name="e_company" value="{{ it.company or '' }}"></td>
+        <td class="cell-check">
+          <input type="checkbox" name="e_enabled" value="{{ loop.index0 }}" {% if it.enabled %}checked{% endif %}>
+        </td>
+        <td>
+          <form method="post" action="/phone-book/{{ it.id }}/delete" style="display:inline"
+                onsubmit="return confirm('「{{ it.name }}」を電話帳から削除しますか?')">
+            <button type="submit" class="btn btn--small btn--danger">削除</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+      <tr>
+        <td>
+          <input type="hidden" name="e_id" value="">
+          <input class="field__input field__input--mono" type="text" name="e_speed"
+                 pattern="\d{2,3}" maxlength="3" placeholder="01">
+        </td>
+        <td><input class="field__input" type="text" name="e_name" placeholder="〇〇商事"></td>
+        <td><input class="field__input field__input--mono" type="text" name="e_number" placeholder="0591234567"></td>
+        <td><input class="field__input" type="text" name="e_kana" placeholder="まるまるしょうじ"></td>
+        <td><input class="field__input" type="text" name="e_company" placeholder="営業部"></td>
+        <td class="cell-check">
+          <input type="checkbox" name="e_enabled" value="{{ items|length }}" checked>
+        </td>
+        <td><small class="field__help">新規行</small></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="form-foot">
+    <button type="submit" class="btn btn--primary">電話帳を保存</button>
+  </div>
+</form>
+
+<p class="form-hint">
+  短縮番号を追加・変更したあとは、左下の
+  <strong>「変更を Asterisk へ反映」</strong>を実行してください。
+  実行するまで電話機からの短縮発信は使えません。
+</p>
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/trunks/new" class="btn btn--primary">+ トランクを追加</a>
+{% endblock %}
+
+{% block content %}
+{% if not items %}
+<div class="empty">
+  <p>トランクが登録されていません。</p>
+  <p class="empty__hint">ひかり電話オフィスA は「プリセット選択」から 1 クリック投入できます
+    (ただし実回線での動作検証は行えていません)。</p>
+  <a href="/trunks/new" class="btn btn--primary">最初のトランクを追加</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>名前 / 種別</th>
+      <th>接続先</th>
+      <th>主番号</th>
+      <th>追加番号</th>
+      <th>同時CH</th>
+      <th>状態</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td>
+        <strong>{{ it.name }}</strong><br>
+        {% if it.trunk_type == "hikari_office_a_hgw" %}
+          <span class="badge badge--hikari">ひかり電話A / HGW</span>
+        {% elif it.trunk_type == "hikari_office_a_og" %}
+          <span class="badge badge--hikari">ひかり電話A / OG</span>
+        {% elif it.trunk_type == "register" %}
+          <span class="badge badge--neutral">REGISTER</span>
+        {% elif it.trunk_type == "peer" %}
+          <span class="badge badge--neutral">IP-PEER</span>
+        {% else %}
+          <span class="badge badge--neutral">{{ it.trunk_type }}</span>
+        {% endif %}
+      </td>
+      <td class="mono">{{ it.host }}:{{ it.port }} / {{ it.transport }}</td>
+      <td class="mono">{{ it.outbound_caller_id or "—" }}</td>
+      <td class="mono compact">
+        {% if it.additional_did_numbers %}
+          {{ it.additional_did_numbers }}
+        {% else %}
+          —
+        {% endif %}
+      </td>
+      <td>{{ it.max_channels if it.max_channels > 0 else "∞" }}</td>
+      <td>
+        {% if it.enabled %}
+          <span class="badge badge--ok">有効</span>
+        {% else %}
+          <span class="badge badge--off">無効</span>
+        {% endif %}
+      </td>
+      <td class="actions">
+        <a href="/trunks/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/trunks/{{ it.id }}/delete"
+              onsubmit="return confirm('トランク {{ it.name }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

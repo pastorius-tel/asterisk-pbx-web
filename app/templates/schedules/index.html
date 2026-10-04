@@ -1,0 +1,593 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{% if hol_message %}
+<div class="{% if hol_ok == '1' %}notice{% else %}errors{% endif %}" role="alert">
+  <strong>{{ hol_message }}</strong>
+</div>
+{% endif %}
+
+{% if error_message %}
+<div class="errors" role="alert">
+  <strong>入力に問題があったため、一部を保存できませんでした</strong>
+  <p>{{ error_message }}</p>
+</div>
+{% endif %}
+
+<p class="form-hint">
+  営業時間・休業日まわりの設定をこの 1 画面でまとめて行えます。
+  各表はその場で編集でき、一番下の空行に入力すると新規追加になります。
+  <strong>セクションごとに「保存」ボタンを押してください。</strong>
+  設定後は、左下の「変更を Asterisk へ反映」も忘れずに実行してください。
+</p>
+
+<!-- ================= カレンダー ================= -->
+<section class="panel">
+  <header class="panel__head">
+    <h2>① 年間カレンダー (確認・休日の設定)</h2>
+  </header>
+  <p class="form-hint">
+    平日・休日・祝日・指定休日を色分けして確認できます。
+    <strong>日付をクリックすると、その日に適用する内容
+    (② 日次パターン / 終日休業 / 休み解除) を選べます。</strong>
+    「平日は9-17時、この日だけ午前のみ営業」といった設定もここでできます。
+    期間で登録した指定休日 (年末年始など) はクリックでは解除されません
+    — ④ の表から編集してください。
+  </p>
+  <div class="form-row" style="align-items:flex-end">
+    <label class="field" style="max-width:140px">
+      <span class="field__label">表示する年</span>
+      <select class="field__select" id="calYear"></select>
+    </label>
+    <label class="field" style="max-width:220px">
+      <span class="field__label">曜日設定を参照する時間条件</span>
+      <select class="field__select" id="calTc">
+        <option value="">(土日を休みとして表示)</option>
+        {% for t in conditions %}
+        <option value="{{ t.name }}">{{ t.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <p class="form-hint" style="margin-top:8px">
+    <span class="cal-legend cal-weekday">平日</span>
+    <span class="cal-legend cal-weekend">曜日設定の休み</span>
+    <span class="cal-legend cal-holiday">祝日</span>
+    <span class="cal-legend cal-company">指定休日</span>
+  </p>
+
+  <div id="calPalette" class="cal-palette" style="display:none">
+    <p class="form-hint" style="margin-bottom:6px">
+      <strong id="calSelectedDate"></strong> に適用する内容を選んでください:
+    </p>
+    <div id="calPatternBtns"></div>
+    <button type="button" class="btn btn--small" id="calCancel"
+            style="margin-top:8px">選択をやめる</button>
+  </div>
+
+  <div id="calArea" style="overflow-x:auto"></div>
+</section>
+
+<!-- ================= 日次パターン ================= -->
+<section class="panel">
+  <header class="panel__head">
+    <h2>② 日次パターン</h2>
+  </header>
+  <p class="form-hint">
+    1 日の中で「営業時間内 (ON)」となる時間帯のテンプレートです。
+    時間帯は <code>09:00-12:00,13:00-18:00</code> のように
+    <code>HH:MM-HH:MM</code> をカンマ区切りで複数指定できます。
+    <strong>空欄にすると「終日休業」</strong>のパターンになります
+    (祝日・盆休み用)。
+  </p>
+  <form method="post" action="/schedules/patterns/save">
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th style="min-width:120px">名前 (英数字)</th>
+          <th style="min-width:120px">表示名</th>
+          <th style="min-width:220px">営業時間 (ON)</th>
+          <th>有効</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in patterns %}
+        <tr>
+          <td>
+            <input type="hidden" name="p_id" value="{{ p.id }}">
+            <input class="field__input field__input--mono" type="text" name="p_name" value="{{ p.name }}" pattern="[A-Za-z0-9_\-]+">
+          </td>
+          <td><input class="field__input" type="text" name="p_display_name" value="{{ p.display_name }}"></td>
+          <td><input class="field__input field__input--mono" type="text" name="p_on_ranges" value="{{ p.on_ranges }}" placeholder="09:00-18:00"
+                   pattern="^$|^(?:[01]?[0-9]|2[0-3]):[0-5][0-9]-(?:[01]?[0-9]|2[0-3]):[0-5][0-9](,(?:[01]?[0-9]|2[0-3]):[0-5][0-9]-(?:[01]?[0-9]|2[0-3]):[0-5][0-9])*$"
+                   title="09:00-18:00 の形式で入力してください (複数はカンマ区切り)"></td>
+          <td><input type="checkbox" name="p_enabled" value="{{ loop.index0 }}" {% if p.enabled %}checked{% endif %}></td>
+          <td></td>
+        </tr>
+        {% endfor %}
+        <tr>
+          <td>
+            <input type="hidden" name="p_id" value="">
+            <input class="field__input field__input--mono" type="text" name="p_name" placeholder="weekday" pattern="[A-Za-z0-9_\-]*">
+          </td>
+          <td><input class="field__input" type="text" name="p_display_name" placeholder="平日"></td>
+          <td><input class="field__input field__input--mono" type="text" name="p_on_ranges" placeholder="09:00-12:00,13:00-18:00"
+                   pattern="^$|^(?:[01]?[0-9]|2[0-3]):[0-5][0-9]-(?:[01]?[0-9]|2[0-3]):[0-5][0-9](,(?:[01]?[0-9]|2[0-3]):[0-5][0-9]-(?:[01]?[0-9]|2[0-3]):[0-5][0-9])*$"
+                   title="09:00-18:00 の形式で入力してください (複数はカンマ区切り)"></td>
+          <td><input type="checkbox" name="p_enabled" value="{{ patterns|length }}" checked></td>
+          <td><small class="field__help">新規行</small></td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+    <div class="form-foot">
+      <button type="submit" class="btn btn--primary">日次パターンを保存</button>
+    </div>
+  </form>
+  {% if patterns %}
+  <p class="form-hint">削除:
+    {% for p in patterns %}
+    <form method="post" action="/schedules/patterns/{{ p.id }}/delete" style="display:inline"
+          onsubmit="return confirm('パターン「{{ p.display_name }}」を削除しますか?')">
+      <button type="submit" class="btn btn--small btn--danger">{{ p.display_name }}</button>
+    </form>
+    {% endfor %}
+  </p>
+  {% endif %}
+</section>
+
+<!-- ================= 時間条件 ================= -->
+<section class="panel">
+  <header class="panel__head">
+    <h2>③ 曜日パターン (着信の振り分け)</h2>
+  </header>
+  {% if not pattern_choices %}
+  <div class="empty">
+    <p>先に「② 日次パターン」を 1 つ以上作成・保存してください。</p>
+  </div>
+  {% else %}
+  <p class="form-hint">
+    曜日ごとに日次パターンを割り当て、営業時間内か時間外かで転送先を
+    切り替えます。「(休)」を選ぶとその曜日は終日「時間外」扱いです。
+    「祝日」「指定休日」にチェックを入れると、④⑤ で登録した休みを
+    曜日設定より優先します。それぞれ適用する日次パターンを選べるので、
+    「祝日は終日休業、お盆は午前だけ営業」といった設定も可能です。
+    判定は<strong>指定休日 → 祝日 → 曜日</strong>の順です。
+    作成した曜日パターン (時間条件) は、着信ルートなどの転送先として選べます。
+  </p>
+  <form method="post" action="/schedules/conditions/save">
+    <div style="overflow-x:auto">
+    <table class="data-table table--slim">
+      <thead>
+        <tr>
+          <th style="min-width:110px">名前 (英数字)</th>
+          {% for f, jp in weekdays %}<th style="min-width:90px">{{ jp }}</th>{% endfor %}
+          <th style="min-width:130px">祝日</th>
+          <th style="min-width:130px">指定休日</th>
+          <th style="min-width:150px">時間内 →</th>
+          <th style="min-width:150px">時間外 →</th>
+          <th>有効</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in conditions %}
+        <tr>
+          <td>
+            <input type="hidden" name="t_id" value="{{ t.id }}">
+            <input class="field__input field__input--mono" type="text" name="t_name" value="{{ t.name }}" pattern="[A-Za-z0-9_\-]+">
+          </td>
+          {% for f, jp in weekdays %}
+          <td>
+            <select class="field__select" name="t_{{ f }}_pattern_id">
+              <option value="" {% if not t[f ~ "_pattern_id"] %}selected{% endif %}>(休)</option>
+              {% for opt in pattern_choices %}
+              <option value="{{ opt.value }}" {% if t[f ~ "_pattern_id"]|string == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          {% endfor %}
+          <td class="cell-check">
+            <input type="checkbox" name="t_use_national" value="{{ loop.index0 }}" {% if t.use_national_holidays %}checked{% endif %}>
+            <select class="field__select" name="t_national_pattern_id">
+              <option value="" {% if not t.national_holiday_pattern_id %}selected{% endif %}>(終日休業)</option>
+              {% for opt in pattern_choices %}
+              <option value="{{ opt.value }}" {% if t.national_holiday_pattern_id|string == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td class="cell-check">
+            <input type="checkbox" name="t_use_company" value="{{ loop.index0 }}" {% if t.use_company_holidays %}checked{% endif %}>
+            <select class="field__select" name="t_company_pattern_id">
+              <option value="" {% if not t.company_holiday_pattern_id %}selected{% endif %}>(終日休業)</option>
+              {% for opt in pattern_choices %}
+              <option value="{{ opt.value }}" {% if t.company_holiday_pattern_id|string == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <select class="field__select" name="t_inside">
+              {% for opt in dest_choices %}
+              <option value="{{ opt.value }}" {% if (t.inside_type ~ ":" ~ t.inside_value) == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <select class="field__select" name="t_outside">
+              {% for opt in dest_choices %}
+              <option value="{{ opt.value }}" {% if (t.outside_type ~ ":" ~ t.outside_value) == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td class="cell-check"><input type="checkbox" name="t_enabled" value="{{ loop.index0 }}" {% if t.enabled %}checked{% endif %}></td>
+        </tr>
+        {% endfor %}
+        <tr>
+          <td>
+            <input type="hidden" name="t_id" value="">
+            <input class="field__input field__input--mono" type="text" name="t_name" placeholder="business-hours" pattern="[A-Za-z0-9_\-]*">
+          </td>
+          {% for f, jp in weekdays %}
+          <td>
+            <select class="field__select" name="t_{{ f }}_pattern_id">
+              <option value="">(休)</option>
+              {% for opt in pattern_choices %}
+              <option value="{{ opt.value }}">{{ opt.label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          {% endfor %}
+          <td class="cell-check">
+            <input type="checkbox" name="t_use_national" value="{{ conditions|length }}" checked>
+            <select class="field__select" name="t_national_pattern_id">
+              <option value="">(終日休業)</option>
+              {% for opt in pattern_choices %}<option value="{{ opt.value }}">{{ opt.label }}</option>{% endfor %}
+            </select>
+          </td>
+          <td class="cell-check">
+            <input type="checkbox" name="t_use_company" value="{{ conditions|length }}" checked>
+            <select class="field__select" name="t_company_pattern_id">
+              <option value="">(終日休業)</option>
+              {% for opt in pattern_choices %}<option value="{{ opt.value }}">{{ opt.label }}</option>{% endfor %}
+            </select>
+          </td>
+          <td>
+            <select class="field__select" name="t_inside">
+              {% for opt in dest_choices %}<option value="{{ opt.value }}">{{ opt.label }}</option>{% endfor %}
+            </select>
+          </td>
+          <td>
+            <select class="field__select" name="t_outside">
+              {% for opt in dest_choices %}<option value="{{ opt.value }}">{{ opt.label }}</option>{% endfor %}
+            </select>
+          </td>
+          <td class="cell-check"><input type="checkbox" name="t_enabled" value="{{ conditions|length }}" checked></td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+    <div class="form-foot">
+      <button type="submit" class="btn btn--primary">曜日パターンを保存</button>
+    </div>
+  </form>
+  {% if conditions %}
+  <p class="form-hint">削除:
+    {% for t in conditions %}
+    <form method="post" action="/schedules/conditions/{{ t.id }}/delete" style="display:inline"
+          onsubmit="return confirm('曜日パターン「{{ t.name }}」を削除しますか?')">
+      <button type="submit" class="btn btn--small btn--danger">{{ t.name }}</button>
+    </form>
+    {% endfor %}
+  </p>
+  {% endif %}
+  {% endif %}
+</section>
+<!-- ================= 会社指定休日 ================= -->
+<section class="panel">
+  <header class="panel__head">
+    <h2>④ 指定休日 (年末年始・お盆・GW など)</h2>
+  </header>
+  <p class="form-hint">
+    会社が独自に定める休業日です。祝日とは別に管理します。
+    開始日・終了日はカレンダーから選べます。
+    <strong>「毎年」にチェックを入れると年を無視して毎年適用</strong>
+    されます (年末年始・お盆向け)。終了日が開始日より前の場合
+    (例: 12/29〜1/3) は年をまたぐ期間として扱われます。
+  </p>
+  <form method="post" action="/holidays/company/save">
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th style="min-width:140px">名前</th>
+          <th style="min-width:150px">開始日</th>
+          <th style="min-width:150px">終了日</th>
+          <th>毎年</th>
+          <th>有効</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in company_rows %}
+        <tr>
+          <td>
+            <input type="hidden" name="h_id" value="{{ row.obj.id }}">
+            <input class="field__input" type="text" name="h_name" value="{{ row.obj.name }}">
+          </td>
+          <td><input class="field__input" type="date" name="h_start_date" value="{{ row.start_date }}"></td>
+          <td><input class="field__input" type="date" name="h_end_date" value="{{ row.end_date }}"></td>
+          <td><input type="checkbox" name="h_recurring" value="{{ loop.index0 }}" {% if not row.obj.year %}checked{% endif %}></td>
+          <td><input type="checkbox" name="h_enabled" value="{{ loop.index0 }}" {% if row.obj.enabled %}checked{% endif %}></td>
+        </tr>
+        {% endfor %}
+        <tr>
+          <td>
+            <input type="hidden" name="h_id" value="">
+            <input class="field__input" type="text" name="h_name" placeholder="年末年始">
+          </td>
+          <td><input class="field__input" type="date" name="h_start_date"></td>
+          <td><input class="field__input" type="date" name="h_end_date"></td>
+          <td><input type="checkbox" name="h_recurring" value="{{ company_rows|length }}" checked></td>
+          <td><input type="checkbox" name="h_enabled" value="{{ company_rows|length }}" checked></td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+    <div class="form-foot">
+      <button type="submit" class="btn btn--primary">指定休日を保存</button>
+    </div>
+  </form>
+  {% if company_rows %}
+  <p class="form-hint">削除:
+    {% for row in company_rows %}
+    <form method="post" action="/holidays/company/{{ row.obj.id }}/delete" style="display:inline"
+          onsubmit="return confirm('「{{ row.obj.name }}」を削除しますか?')">
+      <button type="submit" class="btn btn--small btn--danger">{{ row.obj.name }}</button>
+    </form>
+    {% endfor %}
+  </p>
+  {% endif %}
+</section>
+
+<!-- ================= 祝日 ================= -->
+<section class="panel">
+  <header class="panel__head">
+    <h2>⑤ 祝日データの取得</h2>
+  </header>
+  <p class="form-hint">
+    内閣府が公開している「国民の祝日」データを取り込みます。成人の日や
+    春分の日のように<strong>毎年日付が変わる祝日も自動で反映</strong>
+    されます。年に一度、翌年分が公開されたら取り込み直してください。
+  </p>
+  <p class="form-hint" style="font-size:12px;">
+    出典：内閣府「<a href="https://www8.cao.go.jp/chosei/shukujitsu/gaiyou.html"
+    target="_blank" rel="noopener noreferrer">国民の祝日について</a>」
+    (本ツールはデータを同梱せず、取り込み時に内閣府のサイトから取得します)
+  </p>
+  <p class="form-hint">
+    取り込み状況:
+    {% if national_holiday_total %}
+      <strong>{{ national_holiday_total }}</strong> 件登録済み
+      (下は {{ this_year }} 年分)
+      <span class="badge badge--ok">取り込み済み</span>
+    {% else %}
+      <span class="badge badge--off">未取り込み</span>
+    {% endif %}
+  </p>
+
+  <div class="form-row" style="align-items:flex-start">
+    <form method="post" action="/holidays/national/fetch" style="margin-right:16px">
+      <button type="submit" class="btn btn--primary"
+              onclick="this.disabled=true;this.textContent='取得中…';this.form.submit();">
+        最新の祝日データを取得
+      </button>
+      <small class="field__help">
+        インターネット経由で内閣府のサイトから取得します。
+      </small>
+    </form>
+    <form method="post" action="/holidays/national/upload" enctype="multipart/form-data">
+      <label class="field">
+        <span class="field__label">CSV を手動で取り込む</span>
+        <input class="field__input" type="file" name="csv_file" accept=".csv" required>
+        <small class="field__help">
+          サーバーが直接インターネットへ出られない場合は、
+          <a href="https://www8.cao.go.jp/chosei/shukujitsu/gaiyou.html" target="_blank" rel="noopener">
+            内閣府のページ</a>から
+          <code>syukujitsu.csv</code> をダウンロードして、そのまま
+          アップロードしてください。
+        </small>
+      </label>
+      <button type="submit" class="btn">アップロードして取り込む</button>
+    </form>
+  </div>
+
+  {% if national_holiday_total %}
+  <p class="form-hint" style="margin-top:16px">
+    <a href="/holidays/national/list" target="_blank" rel="noopener" class="btn">
+      取り込んだ祝日の一覧を表示 (別ウィンドウ)
+    </a>
+    <form method="post" action="/holidays/national/clear" style="display:inline;margin-left:8px"
+          onsubmit="return confirm('取り込んだ祝日データをすべて削除しますか?')">
+      <button type="submit" class="btn btn--small btn--danger">祝日データを削除</button>
+    </form>
+  </p>
+  {% endif %}
+</section>
+
+
+<script>
+(function () {
+  const area = document.getElementById("calArea");
+  const yearSel = document.getElementById("calYear");
+  const tcSel = document.getElementById("calTc");
+  const palette = document.getElementById("calPalette");
+  const patternBtns = document.getElementById("calPatternBtns");
+  const selectedLabel = document.getElementById("calSelectedDate");
+  const cancelBtn = document.getElementById("calCancel");
+  const thisYear = new Date().getFullYear();
+  let patterns = [];
+  let selectedDate = null;
+
+  for (let y = thisYear - 1; y <= thisYear + 2; y++) {
+    const o = document.createElement("option");
+    o.value = y; o.textContent = y + "年";
+    if (y === thisYear) o.selected = true;
+    yearSel.appendChild(o);
+  }
+
+  const WD = ["日","月","火","水","木","金","土"];
+
+  function hidePalette() {
+    palette.style.display = "none";
+    selectedDate = null;
+    area.querySelectorAll(".cal-selected").forEach(e => e.classList.remove("cal-selected"));
+  }
+  cancelBtn.addEventListener("click", hidePalette);
+
+  function showPalette(date, el) {
+    selectedDate = date;
+    selectedLabel.textContent = date;
+    area.querySelectorAll(".cal-selected").forEach(e => e.classList.remove("cal-selected"));
+    el.classList.add("cal-selected");
+    patternBtns.innerHTML = "";
+
+    // 「休みを解除する」
+    const clr = document.createElement("button");
+    clr.type = "button";
+    clr.className = "btn btn--small";
+    clr.textContent = "通常営業に戻す (休み解除)";
+    clr.addEventListener("click", () => applyClear(date));
+    patternBtns.appendChild(clr);
+
+    // 「終日休業にする」
+    const off = document.createElement("button");
+    off.type = "button";
+    off.className = "btn btn--small btn--danger";
+    off.style.marginLeft = "6px";
+    off.textContent = "終日休業にする";
+    off.addEventListener("click", () => applyPattern(date, "", "終日休業"));
+    patternBtns.appendChild(off);
+
+    // 各日次パターン
+    patterns.forEach(p => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn btn--small";
+      b.style.marginLeft = "6px";
+      b.textContent = p.name + (p.ranges ? " (" + p.ranges + ")" : "");
+      b.addEventListener("click", () => applyPattern(date, p.id, p.name));
+      patternBtns.appendChild(b);
+    });
+    palette.style.display = "block";
+    palette.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  async function applyPattern(date, patternId, label) {
+    if (!confirm(date + " を「" + label + "」に設定します。よろしいですか?")) return;
+    const body = new URLSearchParams({ date_str: date, pattern_id: patternId });
+    try {
+      const res = await fetch("/holidays/calendar/set-pattern", {
+        method: "POST", body,
+        headers: {"Content-Type": "application/x-www-form-urlencoded"},
+      });
+      const r = await res.json();
+      if (!r.ok) { alert(r.message || "更新できませんでした"); return; }
+      hidePalette();
+      load();
+    } catch (e) { alert("更新に失敗しました"); }
+  }
+
+  async function applyClear(date) {
+    if (!confirm(date + " の休み設定を解除します。よろしいですか?")) return;
+    const body = new URLSearchParams({ date_str: date });
+    try {
+      const res = await fetch("/holidays/calendar/toggle", {
+        method: "POST", body,
+        headers: {"Content-Type": "application/x-www-form-urlencoded"},
+      });
+      const r = await res.json();
+      if (!r.ok) { alert(r.message || "更新できませんでした"); return; }
+      hidePalette();
+      load();
+    } catch (e) { alert("更新に失敗しました"); }
+  }
+
+  async function load() {
+    area.innerHTML = '<p class="form-hint">読み込み中…</p>';
+    const params = new URLSearchParams({ year: yearSel.value });
+    if (tcSel.value) params.set("tc", tcSel.value);
+    let data;
+    try {
+      const res = await fetch("/holidays/calendar?" + params.toString());
+      data = await res.json();
+    } catch (e) {
+      area.innerHTML = '<p class="form-hint">カレンダーを読み込めませんでした。</p>';
+      return;
+    }
+    patterns = data.patterns || [];
+    const byDate = {};
+    data.days.forEach(d => { byDate[d.date] = d; });
+
+    // 休日名・パターン名はユーザーが自由に入力できる値 (祝日名は内閣府の
+    // CSV 取り込み) なので、文字列連結で HTML を組み立てると
+    // <img onerror=...> のような値でスクリプトが動いてしまう。
+    // DOM API (createElement / textContent) で組み立てて、値が HTML として
+    // 解釈される経路を無くす。
+    const grid = document.createElement("div");
+    grid.className = "cal-grid";
+
+    function el(tag, cls, text) {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined && text !== null && text !== "") e.textContent = text;
+      return e;
+    }
+
+    for (let m = 1; m <= 12; m++) {
+      const month = el("div", "cal-month");
+      month.appendChild(el("div", "cal-month__title", m + "月"));
+
+      const week = el("div", "cal-week");
+      WD.forEach(w => week.appendChild(el("div", "cal-wd", w)));
+      month.appendChild(week);
+
+      const days = el("div", "cal-days");
+      const first = new Date(data.year, m - 1, 1);
+      const lastDay = new Date(data.year, m, 0).getDate();
+      for (let i = 0; i < first.getDay(); i++) {
+        days.appendChild(el("div", "cal-day cal-empty"));
+      }
+      for (let d = 1; d <= lastDay; d++) {
+        const iso = data.year + "-" + String(m).padStart(2,"0") + "-" + String(d).padStart(2,"0");
+        const info = byDate[iso] || { kind: "weekday", label: "", pattern: "" };
+        // 指定休日にパターンが割り当てられていればそれを、無ければ休日名を表示
+        const sub = info.pattern || info.label || "";
+        const title = [info.label, info.pattern].filter(Boolean).join(" / ");
+        const kind = String(info.kind || "weekday").replace(/[^a-z0-9_-]/gi, "");
+
+        const cell = el("div", "cal-day cal-" + kind);
+        cell.dataset.date = iso;
+        if (title) cell.title = title;
+        cell.appendChild(el("span", "cal-num", String(d)));
+        if (sub) cell.appendChild(el("span", "cal-label", sub));
+        days.appendChild(cell);
+      }
+      month.appendChild(days);
+      grid.appendChild(month);
+    }
+
+    area.replaceChildren(grid);
+
+    area.querySelectorAll(".cal-day[data-date]").forEach(el => {
+      el.addEventListener("click", () => showPalette(el.dataset.date, el));
+    });
+  }
+
+  yearSel.addEventListener("change", () => { hidePalette(); load(); });
+  tcSel.addEventListener("change", () => { hidePalette(); load(); });
+  load();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/audio/tts" class="btn">文章から音声を作る</a>
+<a href="/audio/new" class="btn btn--primary">+ 音源をアップロード</a>
+{% endblock %}
+
+{% block content %}
+
+{% if not ffmpeg_ok %}
+<div class="errors" role="alert">
+  <strong>ffmpeg が見つかりません</strong>
+  <p>音源変換には ffmpeg が必要です。<code>sudo apt install ffmpeg</code> 等でインストール後、<code>.env</code> の <code>FFMPEG_PATH</code> を確認してください。</p>
+</div>
+{% endif %}
+
+<p class="form-hint">
+  変換後の WAV は <code>{{ sounds_dir }}/&lt;カテゴリ&gt;/&lt;ファイル名&gt;.wav</code> に保存されます。
+  Asterisk からは拡張子なしで参照できます (例: <code>Playback(managed/moh/bgm_morning)</code>)。
+</p>
+
+{% if not items %}
+<div class="empty">
+  <p>音源ファイルが登録されていません。</p>
+  <a href="/audio/new" class="btn btn--primary">最初の音源をアップロード</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>名前</th>
+      <th>カテゴリ</th>
+      <th>元ファイル</th>
+      <th>長さ</th>
+      <th>状態</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td><strong>{{ it.name }}</strong></td>
+      <td>
+        <span class="badge badge--neutral">{{ it.category }}</span>
+      </td>
+      <td class="mono compact">{{ it.original_filename }}</td>
+      <td class="mono">
+        {% if it.duration_seconds %}
+          {{ "%.1f"|format(it.duration_seconds) }} 秒
+        {% else %}—{% endif %}
+      </td>
+      <td>
+        {% if it.conversion_status == "ok" %}
+          <span class="badge badge--ok">変換済</span>
+        {% elif it.conversion_status == "failed" %}
+          <span class="badge" style="background:#fee;color:#b42318">失敗</span>
+        {% else %}
+          <span class="badge badge--warn">未変換</span>
+        {% endif %}
+      </td>
+      <td class="actions">
+        {% if it.conversion_status == "ok" %}
+          <audio controls preload="none" style="vertical-align:middle;height:24px;max-width:160px">
+            <source src="/audio/{{ it.id }}/preview" type="audio/wav">
+          </audio>
+        {% endif %}
+        {% if it.source_format == "tts" %}
+          <a href="/audio/tts?edit={{ it.id }}" class="btn btn--small">文章を編集</a>
+        {% else %}
+          <form method="post" action="/audio/{{ it.id }}/reconvert" style="display:inline">
+            <button type="submit" class="btn btn--small">再変換</button>
+          </form>
+        {% endif %}
+        <form method="post" action="/audio/{{ it.id }}/delete"
+              onsubmit="return confirm('音源 {{ it.name }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% if it.conversion_status == "failed" and it.conversion_log %}
+    <tr><td colspan="6">
+      <details>
+        <summary class="form-hint">変換エラーログを表示</summary>
+        <pre style="white-space:pre-wrap;font-size:11px;color:#b42318;margin:6px 0;">{{ it.conversion_log }}</pre>
+      </details>
+    </td></tr>
+    {% endif %}
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

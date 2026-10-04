@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="/parking-lots/new" class="btn btn--primary">+ パークを追加</a>
+{% endblock %}
+
+{% block content %}
+
+<p class="form-hint">
+  通話中に <code>*0</code> でパーク開始 (features.conf で割当)。
+  パーク済みコールは <code>parkpos</code> 範囲の番号 (例: <code>701</code>) をダイヤルすると取り出せます。
+</p>
+
+{% if not items %}
+<div class="empty">
+  <p>パークが登録されていません。</p>
+  <p class="empty__hint">未登録時は <code>parkpos=701-720</code> / <code>parkingtime=120</code> の既定パークが自動生成されます。</p>
+  <a href="/parking-lots/new" class="btn btn--primary">追加する</a>
+</div>
+{% else %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>名前</th>
+      <th>パーク開始番号</th>
+      <th>スロット</th>
+      <th>取り出し時間</th>
+      <th>保留音</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td class="mono">
+        <strong>{{ it.name }}</strong>
+        {% if it.is_default %}<span class="badge badge--hikari">既定</span>{% endif %}
+      </td>
+      <td class="mono">{{ it.park_ext }}</td>
+      <td class="mono">{{ it.park_pos_start }}–{{ it.park_pos_end }}</td>
+      <td class="mono">{{ it.park_time_seconds }}秒</td>
+      <td class="mono">{{ it.moh_class or "default" }}</td>
+      <td>
+        {% if it.enabled %}<span class="badge badge--ok">有効</span>
+        {% else %}<span class="badge badge--off">無効</span>{% endif %}
+      </td>
+      <td class="actions">
+        <a href="/parking-lots/{{ it.id }}/edit" class="btn btn--small">編集</a>
+        <form method="post" action="/parking-lots/{{ it.id }}/delete"
+              onsubmit="return confirm('パーク {{ it.name }} を削除しますか?')"
+              style="display:inline">
+          <button type="submit" class="btn btn--small btn--danger">削除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}
