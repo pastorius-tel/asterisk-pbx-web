@@ -36,6 +36,11 @@ log = logging.getLogger(__name__)
 _ENV_PATH = Path(".env")
 _STAGING_DIRNAME = "_staged_restore"
 
+# 復元時に展開を許す非圧縮サイズの上限 (解凍爆弾対策)。
+# 本ツールのバックアップは SQLite DB + .env だけなので、2GB もあれば
+# 現実的な上限として十分。
+_MAX_RESTORE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+
 
 def _sqlite_db_path() -> Path | None:
     """database_url から sqlite ファイルパスを取り出す。sqlite 以外は None。"""
@@ -137,6 +142,17 @@ async def create_backup() -> BackupInfo:
 
     await asyncio.to_thread(_do_sqlite_backup_sync, db_path, tmp_db)
 
+    # バックアップには .env (SECRET_KEY / AMI_SECRET / 管理パスワード等) が
+    # 含まれる。他のユーザーに読まれないよう、作成前にファイルの許可を
+    # 0600 に絞ってから書き込む (作成後に chmod すると、その一瞬だけ
+    # 既定の許可で中身が置かれるため、先に空ファイルを 0600 で作る)。
+    try:
+        fd = os.open(zip_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.close(fd)
+    except OSError as e:
+        tmp_db.unlink(missing_ok=True)
+        raise RuntimeError(describe_permission_error(zip_path, e)) from e
+
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(tmp_db, "pbx.db")
@@ -206,6 +222,19 @@ async def stage_restore(upload_bytes: bytes, original_filename: str) -> StagedRe
             tmp_zip.write_bytes(upload_bytes)
             with zipfile.ZipFile(tmp_zip) as zf:
                 names = zf.namelist()
+                # 解凍爆弾対策: 展開前に申告サイズの合計を確認する。
+                # (本ツールのバックアップは pbx.db + .env だけなので上限は
+                #  十分大きく取りつつ、異常に大きいものは拒否する)
+                total = sum(
+                    i.file_size for i in zf.infolist()
+                    if i.filename in ("pbx.db", ".env")
+                )
+                if total > _MAX_RESTORE_UNCOMPRESSED_BYTES:
+                    raise ValueError(
+                        "バックアップの中身が大きすぎます。本ツールで作成した"
+                        "backup_*.zip を指定してください。"
+                    )
+                # 展開するのは固定名の 2 ファイルだけ (zip-slip の余地なし)
                 if "pbx.db" in names:
                     zf.extract("pbx.db", stage)
                     has_db = True

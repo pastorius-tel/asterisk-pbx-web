@@ -210,6 +210,24 @@ async def _get_internal_ring_seconds(db: AsyncSession) -> int:
     return row.internal_ring_seconds
 
 
+def _curl_b64_field(name: str, var_expr: str) -> str:
+    """System(curl ...) の --data-urlencode を 1 つ生成する (値を base64 化)。
+
+    name: 送信するパラメータ名 (例 "peer")
+    var_expr: Asterisk のチャネル変数式 (例 "${CL_PEER}")
+
+    発信者名や相手局番号など「外部から届く文字列」は、Asterisk が
+    コマンド文字列へ展開したあと /bin/sh に渡る。値にシェルの特殊文字
+    (' ; $ ` 等) が入っていると任意コマンド実行につながる余地があるため、
+    ダイヤルプラン側で ${BASE64_ENCODE(...)} により base64 へ変換してから
+    渡す。base64 の文字種 [A-Za-z0-9+/=] はシェルの特殊文字を含まない。
+    サーバー側は "b64:" 接頭辞を見て復号する (app/hooks.decode_hook_field)。
+    """
+    return (
+        f"--data-urlencode '{name}=b64:${{BASE64_ENCODE({var_expr})}}' "
+    )
+
+
 def _voicemail_hangup_notify_context(hook_token: str) -> str:
     """留守番電話の録音完了通知用の共通ハングアップハンドラーコンテキスト。
 
@@ -239,8 +257,8 @@ def _voicemail_hangup_notify_context(hook_token: str) -> str:
         ' same => n,GotoIf($["${VMSTATUS}" = "SUCCESS"]?notify:skip)\n'
         " same => n(notify),System(curl -s -m 20 -G "
         f"'{hook_url}' "
-        "--data-urlencode 'mailbox=${VM_HOOK_MAILBOX}' "
-        "--data-urlencode 'vmstatus=${VMSTATUS}')\n"
+        + _curl_b64_field("mailbox", "${VM_HOOK_MAILBOX}")
+        + "--data-urlencode 'vmstatus=${VMSTATUS}')\n"
         " same => n,Return()\n"
         " same => n(skip),Return()\n\n"
     )
@@ -269,15 +287,19 @@ def _calllog_hangup_handler_context(hook_token: str) -> str:
         ' same => n,GotoIf($["${CL_DIRECTION}" = ""]?skip)\n'
         " same => n,System(curl -s -m 20 -G "
         f"'{hook_url}' "
+        # direction / dest_type / blocked はこちらが固定語をセットする値、
+        # disposition 等の CDR フィールドは Asterisk が生成する定型値なので
+        # そのまま渡す。peer / peer_name / did / dest_value / dest_label /
+        # trunk は外部由来・自由文字列になり得るため base64 化する。
         "--data-urlencode 'direction=${CL_DIRECTION}' "
-        "--data-urlencode 'peer=${CL_PEER}' "
-        "--data-urlencode 'peer_name=${CL_PEER_NAME}' "
-        "--data-urlencode 'did=${CL_DID}' "
-        "--data-urlencode 'dest_type=${CL_DEST_TYPE}' "
-        "--data-urlencode 'dest_value=${CL_DEST_VALUE}' "
-        "--data-urlencode 'dest_label=${CL_DEST_LABEL}' "
-        "--data-urlencode 'trunk=${CL_TRUNK}' "
-        "--data-urlencode 'blocked=${CL_BLOCKED}' "
+        + _curl_b64_field("peer", "${CL_PEER}")
+        + _curl_b64_field("peer_name", "${CL_PEER_NAME}")
+        + _curl_b64_field("did", "${CL_DID}")
+        + "--data-urlencode 'dest_type=${CL_DEST_TYPE}' "
+        + _curl_b64_field("dest_value", "${CL_DEST_VALUE}")
+        + _curl_b64_field("dest_label", "${CL_DEST_LABEL}")
+        + _curl_b64_field("trunk", "${CL_TRUNK}")
+        + "--data-urlencode 'blocked=${CL_BLOCKED}' "
         "--data-urlencode 'disposition=${CDR(disposition)}' "
         "--data-urlencode 'duration=${CDR(duration)}' "
         "--data-urlencode 'billsec=${CDR(billsec)}' "
@@ -2121,15 +2143,18 @@ def _render_fax_context(fax: FaxConfig, hook_token: str) -> str:
     out.write(
         " same => n,System(curl -s -m 20 -G "
         f"'{hook_url}' "
-        "--data-urlencode 'file=${FAXFILE}' "
-        "--data-urlencode 'src=${CALLERID(num)}' "
-        "--data-urlencode 'status=${FAXSTATUS}' "
+        # file は本ツールが生成した spool 内のパス、status/pages/mode は
+        # Asterisk の定型値。src (発信者番号) / error / detail / remote
+        # (相手 FAX の局番号) は外部由来の自由文字列になり得るため base64 化。
+        + _curl_b64_field("file", "${FAXFILE}")
+        + _curl_b64_field("src", "${CALLERID(num)}")
+        + "--data-urlencode 'status=${FAXSTATUS}' "
         "--data-urlencode 'pages=${FAXPAGES}' "
-        "--data-urlencode 'error=${FAXERROR}' "
-        "--data-urlencode 'detail=${FAXSTATUSSTRING}' "
-        "--data-urlencode 'mode=${FAXMODE}' "
-        "--data-urlencode 'remote=${REMOTESTATIONID}' "
-        "--data-urlencode 'uniqueid=${UNIQUEID}')\n"
+        + _curl_b64_field("error", "${FAXERROR}")
+        + _curl_b64_field("detail", "${FAXSTATUSSTRING}")
+        + "--data-urlencode 'mode=${FAXMODE}' "
+        + _curl_b64_field("remote", "${REMOTESTATIONID}")
+        + "--data-urlencode 'uniqueid=${UNIQUEID}')\n"
     )
     out.write(" same => n,Hangup()\n")
     # 他のコンテキストからは従来どおり Goto(fax-receive,s,1) で呼べるように
@@ -3053,11 +3078,19 @@ icesupport=no
 
 
 def render_manager_conf() -> str:
-    """manager.conf — AMI。"""
+    """manager.conf — AMI。
+
+    AMI は本ツールが reload 等を指示するための管理用インターフェースで、
+    本ツールと Asterisk は同じサーバー上で動くことを前提にしている。
+    そのため待受は 127.0.0.1 に限定する (以前は 0.0.0.0 で全インター
+    フェースに開いていた)。別ホストから AMI を使う構成は本ツールの
+    想定外で、不要にポート 5038 を LAN へ晒すと総当たりの的になる。
+    ACL (deny/permit) でも二重に絞る。"""
+    bindaddr = settings.ami_host or "127.0.0.1"
     return _HEADER + f"""[general]
 enabled = yes
 port = 5038
-bindaddr = 0.0.0.0
+bindaddr = {bindaddr}
 displayconnects = no
 allowmultiplelogin = yes
 

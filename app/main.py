@@ -53,6 +53,7 @@ from app.routers import (
     trunks,
     voicemail,
 )
+from app.web_guard import web_guard_middleware
 
 logging.basicConfig(level=logging.INFO if not settings.debug else logging.DEBUG)
 log = logging.getLogger(__name__)
@@ -172,6 +173,18 @@ def _log_security_state() -> None:
             "認証なしで全インターフェース (0.0.0.0) を待ち受けています。"
             "ネットワーク上の誰でも PBX を操作できる状態です。"
         )
+    if not (settings.ami_secret or "").strip():
+        log.warning(
+            "AMI_SECRET が未設定です。Asterisk の管理接続 (AMI) が"
+            "パスワード無しになります。.env に AMI_SECRET を設定し、"
+            "manager.conf の secret と一致させてください。"
+        )
+    if not (settings.secret_key or "").strip():
+        log.warning(
+            "SECRET_KEY が未設定のため起動ごとに自動生成します "
+            "(再起動でログインがやり直しになります)。固定したい場合は"
+            ".env に十分長いランダム文字列を設定してください。"
+        )
 
 
 @asynccontextmanager
@@ -189,11 +202,21 @@ async def lifespan(app: FastAPI):
     log.info("シャットダウン完了")
 
 
+# 自動生成される API ドキュメント (/docs, /redoc, /openapi.json) は、
+# 全エンドポイントの一覧と入力形式を外部へ開示してしまう。運用時には
+# 不要なので、DEBUG のときだけ有効にする。
+_docs_kwargs = (
+    {}
+    if settings.debug
+    else {"docs_url": None, "redoc_url": None, "openapi_url": None}
+)
+
 app = FastAPI(
     title="Asterisk PBX Web Management",
     version=APP_VERSION,
     lifespan=lifespan,
     debug=settings.debug,
+    **_docs_kwargs,
 )
 
 # ---- ミドルウェア ----
@@ -215,6 +238,27 @@ app.add_middleware(
 )
 
 
+# Content-Security-Policy。
+# 画面には以前からインラインの <script> / style / on... ハンドラが多数
+# あるため、script/style には 'unsafe-inline' を許さざるを得ない
+# (ここを厳格化するには全テンプレートの作り直しが必要)。それでも
+# 外部ドメインからの読み込み禁止・<base> の固定・frame 埋め込み禁止・
+# フォーム送信先の自ドメイン固定・プラグイン禁止は、既存の画面を壊さず
+# に効かせられる防御なので設定する。
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """基本的なセキュリティヘッダーを付与する。"""
 
@@ -223,10 +267,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers.setdefault("Content-Security-Policy", _CSP)
         return response
 
 
 app.add_middleware(SecurityHeadersMiddleware)
+
+# DNS リバインディング / クロスサイト書き込みのガード (app/web_guard.py)。
+# 最後に追加 = 最も外側で、セッションや認証の処理より前に動く。
+app.middleware("http")(web_guard_middleware)
 
 # ---- Templates / Static ----
 templates = Jinja2Templates(directory="app/templates")

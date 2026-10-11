@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.hooks import verify_hook
+from app.hooks import decode_hook_field, verify_hook
 from app.models import FaxConfig, FaxLog, Trunk
 from app.services import fax_service
 from app.services.ami import AmiClient
@@ -35,6 +35,11 @@ from app.services.permissions import describe_permission_error
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/fax", tags=["fax"])
+
+# 送信 PDF の上限サイズ。アップロードは一旦メモリに読み込むため、
+# 無制限だと巨大ファイル 1 つでメモリを食い潰せる。FAX の原稿なので
+# 30MB もあれば十分。
+_MAX_FAX_PDF_BYTES = 30 * 1024 * 1024
 
 
 async def _get_or_create_config(db: AsyncSession) -> FaxConfig:
@@ -312,6 +317,33 @@ async def fax_send(
     if not dest:
         return await _send_error(request, db, cfg, "宛先 FAX 番号が不正です。")
 
+    # 送信元トランクは、実在する有効なトランク名だけを受け付ける。
+    # 画面の選択肢以外の値 (URL 直叩き等) を弾き、ダイヤルプランや AMI へ
+    # 想定外の文字列が渡るのを防ぐ。
+    valid_trunk = (
+        await db.scalars(
+            select(Trunk).where(Trunk.enabled.is_(True), Trunk.name == trunk_name)
+        )
+    ).first()
+    if valid_trunk is None:
+        return await _send_error(request, db, cfg, "送信に使うトランクを正しく選択してください。")
+
+    # アップロード内容を読み、サイズと中身 (PDF か) を先に検証する。
+    # 拡張子だけの確認では、PDF でないものを Ghostscript に渡して予期しない
+    # 動作をさせられる余地があるため、先頭の %PDF- マジックを確認する。
+    content = await file.read()
+    if len(content) > _MAX_FAX_PDF_BYTES:
+        return await _send_error(
+            request, db, cfg,
+            f"ファイルが大きすぎます ({len(content) // (1024 * 1024)}MB)。"
+            f"{_MAX_FAX_PDF_BYTES // (1024 * 1024)}MB 以下にしてください。",
+        )
+    if content[:5] != b"%PDF-":
+        return await _send_error(
+            request, db, cfg,
+            "PDF ファイルとして認識できません (中身が PDF ではありません)。",
+        )
+
     # アップロード PDF を一時保存
     work = settings.fax_spool_dir / "send_work"
     try:
@@ -322,7 +354,7 @@ async def fax_send(
     ts = datetime.now()
     src_pdf = work / f"src_{ts.strftime('%Y%m%d_%H%M%S')}.pdf"
     try:
-        src_pdf.write_bytes(await file.read())
+        src_pdf.write_bytes(content)
     except OSError as e:
         # スプールに書けないと 500 になり原因が分からなかった。
         return await _send_error(request, db, cfg, describe_permission_error(src_pdf, e))
@@ -464,6 +496,13 @@ async def fax_hook_received(
     - 設定に応じて: メール添付通知 / SMB 外部保存 / ローカル保存
     """
     await verify_hook(request, db, "fax", token)
+
+    # 外部由来の自由文字列はダイヤルプラン側で base64 化して渡される。
+    file = decode_hook_field(file)
+    src = decode_hook_field(src)
+    error = decode_hook_field(error)
+    detail = decode_hook_field(detail)
+    remote = decode_hook_field(remote)
 
     cfg = await _get_or_create_config(db)
     now = datetime.now()

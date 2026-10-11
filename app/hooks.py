@@ -23,6 +23,8 @@ FAX 受信完了 / 留守番電話の録音完了 / 発着信履歴の記録 は
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hmac
 import logging
 import secrets
@@ -35,6 +37,44 @@ from app.config import settings
 from app.models import AppSettings
 
 log = logging.getLogger(__name__)
+
+# ダイヤルプランから渡される自由文字列フィールドの接頭辞。
+#
+# 経緯: 着信通知のフックは Asterisk の System(curl ...) で叩いている。
+# curl のコマンド文字列には発信者名 (${CALLERID(name)}) や相手 FAX の
+# 局番号 (${REMOTESTATIONID}) など「外部から届く値」がそのまま入る。
+# これらは Asterisk がコマンド文字列へ展開したあと /bin/sh に渡される
+# ため、値にシェルの特殊文字が入っていると、意図しないコマンドとして
+# 解釈されてしまう余地があった (着信 1 本でサーバー上の任意コマンドを
+# 実行させられる、という深刻な経路)。
+#
+# 対策: これらの値はダイヤルプラン側で ${BASE64_ENCODE(...)} により
+# base64 へ変換してから渡す。base64 の文字種は [A-Za-z0-9+/=] だけで
+# シェルの特殊文字を一切含まないため、/bin/sh に渡っても安全。
+# サーバー側 (ここ) で "b64:" 接頭辞を見て復号する。古いダイヤルプラン
+# (接頭辞なしの素の値) が残っていても壊れないよう、接頭辞が無ければ
+# そのまま使う。
+_B64_PREFIX = "b64:"
+
+
+def decode_hook_field(value: str) -> str:
+    """フック経由で届いた値を復号する ("b64:" 接頭辞があれば base64 復号)。
+
+    復号できない値 (壊れた base64 等) は安全側に倒して空文字にする。
+    接頭辞が無い値は後方互換のためそのまま返す。
+    """
+    if not value:
+        return value
+    if value.startswith(_B64_PREFIX):
+        raw = value[len(_B64_PREFIX):]
+        if not raw:
+            return ""
+        try:
+            return base64.b64decode(raw, validate=True).decode("utf-8", "replace")
+        except (binascii.Error, ValueError):
+            log.warning("フックの base64 フィールドを復号できませんでした。")
+            return ""
+    return value
 
 # 名前 → (.env 側の設定値, AppSettings 側のカラム名)
 _HOOKS: dict[str, tuple[str, str]] = {

@@ -461,6 +461,21 @@ ExecStart=${INSTALL_DIR}/.venv/bin/gunicorn app.main:app \\
 Restart=on-failure
 RestartSec=5
 
+# --- プロセスの権限を最小化する (systemd サンドボックス) ---
+# 万一 Web 側に侵入されても、OS 全体へ被害が及びにくくする。
+# 本ツールは /etc/asterisk・/var/lib/asterisk・/var/spool/asterisk へ
+# 書き込むため、/etc を読み取り専用にする ProtectSystem=full や
+# ProtectHome は使わない (= 導入先が /home 配下でも壊れない)。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
 [Install]
 WantedBy=multi-user.target
 EOF

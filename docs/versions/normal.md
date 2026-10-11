@@ -1,4 +1,4 @@
-# バージョン一覧 — 通常版 (v0.8.2)
+# バージョン一覧 — 通常版 (v0.9.0)
 
 x86_64 / arm64 の Ubuntu Server 向けの配布物です。
 動作確認: **Ubuntu Server 26.04 LTS (Python 3.14)** / 24.04 LTS (Python 3.12)。
@@ -16,7 +16,7 @@ x86_64 / arm64 の Ubuntu Server 向けの配布物です。
 
 | 項目 | 版 | 備考 |
 |---|---|---|
-| Asterisk PBX Web Management | 0.8.2 | |
+| Asterisk PBX Web Management | 0.9.0 | |
 | Asterisk | 22 系 | `install_all.sh` がインストール時点の最新 22.x をソースからビルド。動作確認: 22.10.1 / 22.11.0 |
 | Python | `3.14.4-1ubuntu0.2` (26.04) / `3.12.3-1ubuntu0.17` (24.04) | OS 標準の `python3` が指す本体 (`python3.14` / `python3.12` パッケージ) |
 

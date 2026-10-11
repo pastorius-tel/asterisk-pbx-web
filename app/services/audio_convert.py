@@ -125,8 +125,16 @@ async def convert_to_asterisk_wav(
     cmd = [
         settings.ffmpeg_path,
         "-y",
+        "-nostdin",
+        # 入力は利用者がアップロードした信頼できないファイル。
+        # 細工した「プレイリスト」系の入力 (ffconcat / HLS 等) は、
+        # 中から任意の URL やローカルファイルを参照させられる余地がある。
+        # 使うプロトコルを file 系だけに限定し、http(s) 等で外部へ
+        # 取りに行かせない (SSRF や情報持ち出しの防止)。
+        "-protocol_whitelist", "file,crypto,data",
         "-loglevel", "error",
         "-i", str(source_path),
+        "-vn",                 # 映像ストリームは無視 (音声だけ扱う)
         "-ac", "1",
         "-ar", str(sample_rate),
         "-acodec", "pcm_s16le",
@@ -138,10 +146,22 @@ async def convert_to_asterisk_wav(
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    # 細工した入力で ffmpeg が終わらない (ハングする) と、ワーカーが
+    # 1 つ張り付いたままになり DoS になりうる。上限時間で打ち切る。
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+    except asyncio.TimeoutError:  # noqa: UP041  (3.10 では builtin と別物)
+        proc.kill()
+        await proc.wait()
+        return ConversionResult(
+            success=False, output_path=None, duration_seconds=None,
+            bytes_size=None,
+            log="変換がタイムアウトしました (180秒)。ファイルを確認してください。",
+        )
     stderr_text = stderr.decode("utf-8", errors="replace")
 
     if proc.returncode != 0:
@@ -173,15 +193,20 @@ async def _probe_duration(path: Path) -> float | None:
         proc = await asyncio.create_subprocess_exec(
             ffprobe,
             "-v", "error",
+            "-protocol_whitelist", "file,crypto,data",
             "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1",
             str(path),
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await proc.communicate()
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
         return float(stdout.decode().strip())
     except (ValueError, OSError):
+        return None
+    except asyncio.TimeoutError:  # noqa: UP041
+        proc.kill()
         return None
 
 

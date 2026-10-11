@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.hooks import verify_hook
+from app.hooks import decode_hook_field, verify_hook
 from app.models import Extension, FaxConfig
 from app.routers.system import get_app_settings
 from app.services import voicemail_service
@@ -194,6 +194,9 @@ async def voicemail_hook_received(
     設定に左右されず確実に日本語表記になる。
     """
     await verify_hook(request, db, "voicemail", token)
+
+    # mailbox はダイヤルプラン側で base64 化して渡される
+    mailbox = decode_hook_field(mailbox)
 
     if vmstatus.upper() != "SUCCESS":
         return {"ok": False, "reason": f"VMSTATUS={vmstatus}"}

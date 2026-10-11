@@ -20,7 +20,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.hooks import verify_hook
+from app.hooks import decode_hook_field, verify_hook
 from app.models import BlockedNumber, CallLog, Extension, PhoneBookEntry
 from app.routers._helpers import form_int
 from app.routers.phone_book import _SPEED_RE
@@ -86,6 +86,15 @@ async def record_call(
     await verify_hook(request, db, "calllog", token)
     if direction not in ("in", "out"):
         return {"ok": False, "reason": "invalid direction"}
+
+    # 外部由来の自由文字列はダイヤルプラン側で base64 化して渡される
+    # (理由は app/hooks.decode_hook_field / _curl_b64_field)。ここで復号する。
+    peer = decode_hook_field(peer)
+    peer_name = decode_hook_field(peer_name)
+    did = decode_hook_field(did)
+    dest_value = decode_hook_field(dest_value)
+    dest_label = decode_hook_field(dest_label)
+    trunk = decode_hook_field(trunk)
 
     # 同じ通話が二重に通知された場合は記録しない
     if uniqueid:

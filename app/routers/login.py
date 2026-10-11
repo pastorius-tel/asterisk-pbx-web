@@ -22,7 +22,14 @@ def _safe_next(raw: str | None) -> str:
     ログイン後に外部サイトへ飛ばされないようにする。
     """
     value = (raw or "").strip()
-    if not value.startswith("/") or value.startswith("//"):
+    # バックスラッシュはブラウザによって "/" と同一視され、"/\evil.com" が
+    # "//evil.com" (= 外部サイト) として扱われることがあるため、正規化して
+    # から判定する。先頭が "/" でない、または "//"・"/\" で始まるものは拒否。
+    normalized = value.replace("\\", "/")
+    if not normalized.startswith("/") or normalized.startswith("//"):
+        return "/"
+    # 制御文字 (改行・タブ等) が混じる遷移先はヘッダ分割等の温床になるため弾く
+    if any(ord(c) < 0x20 for c in value):
         return "/"
     return value
 
