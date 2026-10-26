@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+from urllib.parse import urlsplit
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -153,6 +154,27 @@ async def web_guard_middleware(request: Request, call_next):  # type: ignore[no-
                 request.method, request.url.path, origin,
             )
             return _deny(request)
+        # Origin が "null" (サンドボックス化された iframe 等) の書き込みは、
+        # 送信元を確かめられないため、ログイン中のセッションでは受け付けない。
+        has_session = "session" in request.cookies
+        if origin.lower() == "null" and has_session:
+            log.warning("送信元不明 (Origin: null) の書き込みを拒否: %s", request.url.path)
+            return _deny(request)
+        # Origin も Sec-Fetch-Site も無い場合は Referer で確かめる。現行の
+        # ブラウザは POST に必ず Origin を付けるため、ここに来るのは古い
+        # ブラウザか、ブラウザ以外の道具 (curl 等) だけ。ログイン中の
+        # セッションを持つのに送信元が一切分からない書き込みは拒否する。
+        if not origin and not sec_site:
+            referer = request.headers.get("referer", "")
+            if referer:
+                parts = urlsplit(referer)
+                ref_origin = f"{parts.scheme}://{parts.netloc}" if parts.netloc else ""
+                if not _origin_matches(request, ref_origin):
+                    log.warning("別サイトからの書き込みを拒否 (Referer): %s", request.url.path)
+                    return _deny(request)
+            elif has_session:
+                log.warning("送信元不明の書き込みを拒否: %s %s", request.method, request.url.path)
+                return _deny(request)
 
     return await call_next(request)
 

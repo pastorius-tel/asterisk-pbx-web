@@ -12,6 +12,7 @@ from app.models.extension import Extension
 from app.models.fax import FaxConfig, FaxLog
 from app.models.inbound_route import InboundRoute
 from app.models.ivr import Ivr, IvrEntry
+from app.models.login_attempt import LoginAttempt
 from app.models.national_holiday import NationalHoliday
 from app.models.outbound_route import OutboundRoute
 from app.models.parking import ParkingLot
@@ -48,4 +49,5 @@ __all__ = [
     "IvrEntry",
     "FaxConfig",
     "FaxLog",
+    "LoginAttempt",
 ]

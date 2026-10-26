@@ -27,6 +27,7 @@ import base64
 import binascii
 import hmac
 import logging
+import re
 import secrets
 
 from fastapi import HTTPException, Request
@@ -55,6 +56,15 @@ log = logging.getLogger(__name__)
 # (接頭辞なしの素の値) が残っていても壊れないよう、接頭辞が無ければ
 # そのまま使う。
 _B64_PREFIX = "b64:"
+
+# .env で指定されたフック用トークンとして受け付ける形式。
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{16,128}")
+
+# トークンを渡す HTTP ヘッダ名。URL (クエリ) に載せると Web サーバーの
+# アクセスログにそのまま記録され、ログを読める人に知られてしまうため、
+# 現行のダイヤルプランはヘッダで渡す。旧版のダイヤルプランとの互換の
+# ため、クエリの token= も引き続き受け付ける。
+HOOK_TOKEN_HEADER = "X-Hook-Token"
 
 
 def decode_hook_field(value: str) -> str:
@@ -114,6 +124,16 @@ async def get_hook_token(db: AsyncSession, kind: str) -> str:
             env_attr.upper(),
         )
         env_value = ""
+    if env_value and not _TOKEN_RE.fullmatch(env_value):
+        # トークンはダイヤルプラン (シェルに渡るコマンド行) に埋め込まれる。
+        # 英数字・_・- 以外が入っていると引用が崩れて通知が壊れるうえ、
+        # 短すぎる値は推測されやすい。使わずに自動生成の値へ切り替える。
+        log.warning(
+            ".env の %s は使える文字 (英数字・_・-) 以外を含むか短すぎる"
+            "(16 文字未満) ため無視し、自動生成したトークンを使います。",
+            env_attr.upper(),
+        )
+        env_value = ""
     if env_value:
         return env_value
 
@@ -167,8 +187,12 @@ def check_hook_source(request: Request) -> None:
 
 
 async def verify_hook(request: Request, db: AsyncSession, kind: str, token: str) -> None:
-    """送信元とトークンの両方を検証する。不一致なら 403。"""
+    """送信元とトークンの両方を検証する。不一致なら 403。
+
+    トークンはヘッダ (X-Hook-Token) を優先し、無ければクエリの token=
+    (旧版のダイヤルプラン) を見る。"""
     check_hook_source(request)
+    token = request.headers.get(HOOK_TOKEN_HEADER) or token
     expected = await get_hook_token(db, kind)
     if not expected or not hmac.compare_digest(
         (token or "").encode("utf-8"), expected.encode("utf-8")

@@ -92,6 +92,106 @@ apt_install() {
     DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
 }
 
+# --- netcheck: begin (update_app.sh にも同じものがある) ---
+# インターネット (apt の取得元 / PyPI) に届くかを最初に確かめる。
+# 名前解決 (DNS) ができないまま進むと、apt-get update は警告を出すだけで
+# 成功扱い (終了コード 0) になり、数分待たされたあと pip の段階で止まって
+# 原因が分かりにくい。先に確かめ、調べ方を表示して止める。
+check_network() {
+    if [ "${SKIP_NETCHECK:-0}" = "1" ]; then
+        echo "  ネットワーク確認を省略します (SKIP_NETCHECK=1)"
+        return 0
+    fi
+    local hosts=(pypi.org files.pythonhosted.org) bad_dns=() h apt_hosts
+    # apt の取得元 (ports.ubuntu.com / archive.ubuntu.com 等。コメント行は除く)
+    apt_hosts="$(grep -rhE '^[[:space:]]*[^#[:space:]].*https?://' \
+                    /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null \
+                 | grep -oE 'https?://[^/[:space:]]+' | sed -E 's#^https?://##' \
+                 | sort -u | head -3 || true)"
+    for h in $apt_hosts; do hosts+=("$h"); done
+    # プロキシ経由の環境では外部の名前を直接引けないことがあるため、
+    # その場合は名前解決の確認を省き、実際の接続確認だけにする。
+    if [ -z "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}${HTTP_PROXY:-}" ]; then
+        for h in "${hosts[@]}"; do
+            getent ahosts "$h" >/dev/null 2>&1 || bad_dns+=("$h")
+        done
+    fi
+    local https_ok=1
+    if [ "${#bad_dns[@]}" -eq 0 ] && command -v curl >/dev/null 2>&1; then
+        curl -sS --max-time 20 -o /dev/null https://pypi.org/simple/pip/ 2>/dev/null || https_ok=0
+    fi
+    if [ "${#bad_dns[@]}" -eq 0 ] && [ "$https_ok" = "1" ]; then
+        echo -e "  \033[1;32m OK \033[0m インターネット接続 (apt の取得元 / PyPI)"
+        return 0
+    fi
+    echo "" >&2
+    if [ "${#bad_dns[@]}" -gt 0 ]; then
+        echo -e "\033[1;31mERROR: 名前解決 (DNS) ができません: ${bad_dns[*]}\033[0m" >&2
+    else
+        echo -e "\033[1;31mERROR: インターネット (https://pypi.org) に接続できません。\033[0m" >&2
+    fi
+    cat >&2 <<'NETHELP'
+  このまま進めても、パッケージや Python ライブラリを取得できずに失敗します。
+  次のコマンドで原因を確認してください:
+
+    ping -c 3 8.8.8.8                            # IP アドレスで外へ出られるか
+    ping -c 3 pypi.org                           # 名前で外へ出られるか (DNS)
+    resolvectl status | grep -A2 'DNS Servers'   # 使っている DNS サーバー
+    ip route | grep default                      # デフォルトゲートウェイ
+
+  ・8.8.8.8 には届くのに pypi.org に届かない → DNS サーバーの設定がありません。
+    固定 IP にしている場合は /etc/netplan/ の設定ファイルに nameservers を
+    追加して、sudo netplan apply を実行してください。
+  ・8.8.8.8 にも届かない → LAN ケーブル・ゲートウェイ (ルーター) の設定を
+    確認してください。
+
+  プロキシや社内ミラーを使う環境で、この確認だけを省く場合は
+  SKIP_NETCHECK=1 を付けて実行してください (例: sudo SKIP_NETCHECK=1 bash ...)。
+NETHELP
+    exit 1
+}
+# --- netcheck: end ---
+
+# --- pipfix: begin (update_app.sh にも同じものがある) ---
+# pip は自前の証明書一覧 (certifi) を同梱しており、OS の証明書を更新しても
+# それを使い続ける。2026-10 の eMudhra/emSign 認証局の事故で失効した
+# 証明書が、pip 26.2.2 より前の同梱一覧には残っている (第三者が PyPI との
+# 通信に割り込む「なりすまし」の余地がある)。26.2.2 未満なら入れ替える。
+# 入れ替えは古い pip 自身が行うため、PyPI 公開値の SHA256 で中身を照合し、
+# 通信を差し替えられても偽物は入らないようにする。
+PIP_FIXED_VERSION="26.2.2"
+PIP_FIXED_SHA256_WHL="fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+PIP_FIXED_SHA256_SDIST="3a8e5c800492787f33a4114ef54444546c340df428974ebba17e0fd47e11af2f"
+ensure_pip_fixed() {
+    local py="$1" req rc
+    if "$py" - "$PIP_FIXED_VERSION" <<'PYVER' 2>/dev/null
+import sys
+from importlib.metadata import version
+
+
+def key(v):
+    out = []
+    for part in v.split("."):
+        digits = "".join(c for c in part if c.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
+sys.exit(0 if key(version("pip")) >= key(sys.argv[1]) else 1)
+PYVER
+    then
+        return 0
+    fi
+    req="$(mktemp)"
+    printf 'pip==%s --hash=sha256:%s --hash=sha256:%s\n' \
+        "$PIP_FIXED_VERSION" "$PIP_FIXED_SHA256_WHL" "$PIP_FIXED_SHA256_SDIST" > "$req"
+    rc=0
+    "$py" -m pip install -q --disable-pip-version-check --require-hashes -r "$req" || rc=$?
+    rm -f "$req"
+    return "$rc"
+}
+# --- pipfix: end ---
+
 echo "============================================================"
 echo " Asterisk PBX Web  初回インストール"
 echo "============================================================"
@@ -112,12 +212,24 @@ echo ""
 read -r -p "続行しますか? [yes/N]: " _ans
 [ "$_ans" = "yes" ] || { echo "中止しました。"; exit 0; }
 
+log "事前確認  インターネット接続"
+check_network
+
 # =============================================================================
 log "1/10  パッケージリストの更新"
 # =============================================================================
 wait_apt
-apt-get update -qq || warn "一部リポジトリの取得に失敗しましたが続行します"
-ok "完了"
+# apt-get update は取得に失敗しても警告 (W:) を出すだけで終了コード 0 を
+# 返すため、終了コードでは判定できない。出力 (英語表記に固定) を見て、
+# 失敗があれば「OK」とは言わずにはっきり知らせる。
+APT_OUT="$(LC_ALL=C apt-get update 2>&1)" || true
+if printf '%s\n' "$APT_OUT" | grep -qE '^(W|E): (Failed to fetch|Some index files failed|Could not resolve)|Temporary failure resolving'; then
+    warn "一部のリポジトリからパッケージ一覧を取得できませんでした:"
+    printf '%s\n' "$APT_OUT" | grep -E '^(W|E):' | head -6 | sed 's/^/      /' >&2
+    warn "古いパッケージ一覧のまま続行します (ネットワークを直してから再実行するのが確実です)"
+else
+    ok "完了"
+fi
 
 # =============================================================================
 log "2/10  日本語環境 (ロケール・タイムゾーン・vim)"
@@ -390,7 +502,12 @@ fi
 "$PY" -m venv .venv
 # shellcheck disable=SC1091
 . .venv/bin/activate
-pip install -q --upgrade pip setuptools wheel
+# venv 作成時の pip は Python 同梱の古い版のことがあるため、まず
+# 証明書の問題が直った版 (26.2.2 以上) へハッシュ照合つきで入れ替える
+ensure_pip_fixed python \
+    || err "pip を安全な版 (${PIP_FIXED_VERSION}) に更新できませんでした。インターネット接続を確認してください。"
+pip install -q --upgrade pip setuptools wheel \
+    || err "pip を更新できませんでした。インターネット接続 (DNS) を確認してから再実行してください。"
 
 # requirements/*.lock は動作確認した版の一覧。-c (制約) として渡すので、
 # 新しい版が出ても勝手に上がらず、確認済みの組み合わせで入る。

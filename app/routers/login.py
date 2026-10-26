@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Form, Request
@@ -60,7 +61,7 @@ async def login_submit(
     target = _safe_next(next)
     ip = auth.client_ip(request)
 
-    wait = auth.throttle.blocked_for(ip)
+    wait = await auth.throttle.blocked_for(ip)
     if wait:
         resp = templates.TemplateResponse(
             request,
@@ -75,12 +76,14 @@ async def login_submit(
         return auth.apply_no_store(resp)  # type: ignore[return-value]
 
     if auth.check_credentials(username, password):
-        auth.throttle.record_success(ip)
+        await auth.throttle.record_success(ip)
         auth.login_user(request)
         log.info("ログイン成功: %s (%s)", settings.admin_user, ip)
         return RedirectResponse(target, status_code=303)  # type: ignore[return-value]
 
-    auth.throttle.record_failure(ip)
+    await auth.throttle.record_failure(ip)
+    # 失敗した応答を少し遅らせ、総当たりの速度をさらに落とす
+    await asyncio.sleep(1.0)
     log.warning("ログイン失敗: user=%r from=%s", username, ip)
     resp = templates.TemplateResponse(
         request,

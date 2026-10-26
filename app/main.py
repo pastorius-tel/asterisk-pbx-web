@@ -225,9 +225,12 @@ app = FastAPI(
 # 内側 (= 先に追加) でなければならない。
 app.middleware("http")(auth.auth_middleware)
 
+_SESSION_SECRET = _resolve_secret_key()
+auth.set_session_key(_SESSION_SECRET)
+
 app.add_middleware(
     SessionMiddleware,
-    secret_key=_resolve_secret_key(),
+    secret_key=_SESSION_SECRET,
     max_age=settings.session_max_age,
     same_site="lax",
     # same_site="lax" により、他サイトのページから本ツールへ POST された

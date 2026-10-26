@@ -50,9 +50,18 @@ router = APIRouter(prefix="/extensions", tags=["extensions"])
 
 
 def _gen_secret(length: int = 16) -> str:
-    """SIP パスワードを安全に自動生成。"""
-    alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
+    """SIP パスワードを安全に自動生成する (英字と数字を必ず混ぜる)。
+
+    ExtensionForm の検証 (英字のみ・数字のみを弾く) を必ず満たすよう、
+    英字 1 文字と数字 1 文字を含めてから残りを埋め、並びをシャッフルする。
+    """
+    letters = string.ascii_letters
+    digits = string.digits
+    alphabet = letters + digits
+    chars = [secrets.choice(letters), secrets.choice(digits)]
+    chars += [secrets.choice(alphabet) for _ in range(max(length, 10) - 2)]
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -170,7 +179,12 @@ async def _save_extension(
 
     errors: list[dict] = []
     try:
-        validated = ExtensionForm.model_validate(data)
+        # 編集時に「パスワードを変更していない」場合は強度チェックを免除する
+        # ため、保存済みの値を context で渡す (app/schemas/extension.py 参照)。
+        validated = ExtensionForm.model_validate(
+            data,
+            context={"existing_secret": instance.secret if instance else None},
+        )
     except ValidationError as ve:
         errors = ve.errors()
         validated = None

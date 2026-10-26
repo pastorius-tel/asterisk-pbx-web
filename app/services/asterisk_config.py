@@ -42,7 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.hooks import get_hook_token
+from app.hooks import HOOK_TOKEN_HEADER, get_hook_token
 from app.models import (
     AppSettings,
     AudioFile,
@@ -248,7 +248,6 @@ def _voicemail_hangup_notify_context(hook_token: str) -> str:
     """
     hook_url = (
         f"http://127.0.0.1:{settings.port}/voicemail/hook/received"
-        f"?token={hook_token}"
     )
     return (
         "\n[voicemail-hangup-notify]\n"
@@ -256,7 +255,7 @@ def _voicemail_hangup_notify_context(hook_token: str) -> str:
         "VMSTATUS=${VMSTATUS} mailbox=${VM_HOOK_MAILBOX})\n"
         ' same => n,GotoIf($["${VMSTATUS}" = "SUCCESS"]?notify:skip)\n'
         " same => n(notify),System(curl -s -m 20 -G "
-        f"'{hook_url}' "
+        f"-H '{HOOK_TOKEN_HEADER}: {hook_token}' '{hook_url}' "
         + _curl_b64_field("mailbox", "${VM_HOOK_MAILBOX}")
         + "--data-urlencode 'vmstatus=${VMSTATUS}')\n"
         " same => n,Return()\n"
@@ -277,7 +276,6 @@ def _calllog_hangup_handler_context(hook_token: str) -> str:
     """
     hook_url = (
         f"http://127.0.0.1:{settings.port}/call-logs/hook/record"
-        f"?token={hook_token}"
     )
     return (
         "\n[calllog-notify]\n"
@@ -286,7 +284,7 @@ def _calllog_hangup_handler_context(hook_token: str) -> str:
         # 方向が未設定のチャネル (内部処理用など) は記録しない
         ' same => n,GotoIf($["${CL_DIRECTION}" = ""]?skip)\n'
         " same => n,System(curl -s -m 20 -G "
-        f"'{hook_url}' "
+        f"-H '{HOOK_TOKEN_HEADER}: {hook_token}' '{hook_url}' "
         # direction / dest_type / blocked はこちらが固定語をセットする値、
         # disposition 等の CDR フィールドは Asterisk が生成する定型値なので
         # そのまま渡す。peer / peer_name / did / dest_value / dest_label /
@@ -529,12 +527,17 @@ def _nuisance_check_block(
     out = io.StringIO()
     out.write(" same => n,Set(__NUISANCE_ACTION=)\n")
     out.write(f' same => n,GotoIf($["${{CALLERID(num)}}" = ""]?{skip_dest})\n')
+    # Gosub の引数には発信者番号 (${CALLERID(num)}) を渡す。これは外部から
+    # 届く値で、カンマや括弧が混じると Gosub(...,引数,...) の区切りがずれて
+    # ダイヤルプランの解釈が壊れる。FILTER() で電話番号に使う文字だけに
+    # 絞ってから渡す (数字・* # + のみ)。
+    cid_safe = "${FILTER(0-9*#+,${CALLERID(num)})}"
     if has_blocklist:
-        out.write(" same => n,Gosub(nuisance-blocklist-check,${CALLERID(num)},1)\n")
+        out.write(f" same => n,Gosub(nuisance-blocklist-check,{cid_safe},1)\n")
         out.write(" same => n,Set(__NUISANCE_ACTION=${GOSUB_RETVAL})\n")
         out.write(f' same => n,GotoIf($["${{NUISANCE_ACTION}}" != ""]?{hit_dest})\n')
     if intl_action != "none":
-        out.write(" same => n,Gosub(nuisance-intl-check,${CALLERID(num)},1)\n")
+        out.write(f" same => n,Gosub(nuisance-intl-check,{cid_safe},1)\n")
         out.write(f' same => n,GotoIf($["${{GOSUB_RETVAL}}" != "1"]?{skip_dest})\n')
         if intl_action == "hangup":
             out.write(" same => n,Set(__NUISANCE_ACTION=hangup)\n")
@@ -2059,7 +2062,6 @@ def _render_fax_context(fax: FaxConfig, hook_token: str) -> str:
     spool = str(settings.fax_spool_dir).rstrip("/")
     hook_url = (
         f"http://127.0.0.1:{settings.port}/fax/hook/received"
-        f"?token={hook_token}"
     )
     out = io.StringIO()
     out.write("\n;=== FAX 受信 ===\n")
@@ -2142,7 +2144,7 @@ def _render_fax_context(fax: FaxConfig, hook_token: str) -> str:
     )
     out.write(
         " same => n,System(curl -s -m 20 -G "
-        f"'{hook_url}' "
+        f"-H '{HOOK_TOKEN_HEADER}: {hook_token}' '{hook_url}' "
         # file は本ツールが生成した spool 内のパス、status/pages/mode は
         # Asterisk の定型値。src (発信者番号) / error / detail / remote
         # (相手 FAX の局番号) は外部由来の自由文字列になり得るため base64 化。

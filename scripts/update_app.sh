@@ -40,6 +40,107 @@ ok()   { echo -e "  \033[1;32m OK \033[0m $*"; }
 warn() { echo -e "  \033[1;33mWARN\033[0m $*" >&2; }
 err()  { echo -e "\033[1;31mERROR: $*\033[0m" >&2; exit 1; }
 
+# --- netcheck: begin (install_all.sh にも同じものがある) ---
+# インターネット (apt の取得元 / PyPI) に届くかを最初に確かめる。
+# 名前解決 (DNS) ができないまま進むと、apt-get update は警告を出すだけで
+# 成功扱い (終了コード 0) になり、数分待たされたあと pip の段階で止まって
+# 原因が分かりにくい。先に確かめ、調べ方を表示して止める。
+check_network() {
+    if [ "${SKIP_NETCHECK:-0}" = "1" ]; then
+        echo "  ネットワーク確認を省略します (SKIP_NETCHECK=1)"
+        return 0
+    fi
+    local hosts=(pypi.org files.pythonhosted.org) bad_dns=() h apt_hosts
+    # apt の取得元 (ports.ubuntu.com / archive.ubuntu.com 等。コメント行は除く)
+    apt_hosts="$(grep -rhE '^[[:space:]]*[^#[:space:]].*https?://' \
+                    /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null \
+                 | grep -oE 'https?://[^/[:space:]]+' | sed -E 's#^https?://##' \
+                 | sort -u | head -3 || true)"
+    for h in $apt_hosts; do hosts+=("$h"); done
+    # プロキシ経由の環境では外部の名前を直接引けないことがあるため、
+    # その場合は名前解決の確認を省き、実際の接続確認だけにする。
+    if [ -z "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}${HTTP_PROXY:-}" ]; then
+        for h in "${hosts[@]}"; do
+            getent ahosts "$h" >/dev/null 2>&1 || bad_dns+=("$h")
+        done
+    fi
+    local https_ok=1
+    if [ "${#bad_dns[@]}" -eq 0 ] && command -v curl >/dev/null 2>&1; then
+        curl -sS --max-time 20 -o /dev/null https://pypi.org/simple/pip/ 2>/dev/null || https_ok=0
+    fi
+    if [ "${#bad_dns[@]}" -eq 0 ] && [ "$https_ok" = "1" ]; then
+        echo -e "  \033[1;32m OK \033[0m インターネット接続 (apt の取得元 / PyPI)"
+        return 0
+    fi
+    echo "" >&2
+    if [ "${#bad_dns[@]}" -gt 0 ]; then
+        echo -e "\033[1;31mERROR: 名前解決 (DNS) ができません: ${bad_dns[*]}\033[0m" >&2
+    else
+        echo -e "\033[1;31mERROR: インターネット (https://pypi.org) に接続できません。\033[0m" >&2
+    fi
+    cat >&2 <<'NETHELP'
+  このまま進めても、パッケージや Python ライブラリを取得できずに失敗します。
+  次のコマンドで原因を確認してください:
+
+    ping -c 3 8.8.8.8                            # IP アドレスで外へ出られるか
+    ping -c 3 pypi.org                           # 名前で外へ出られるか (DNS)
+    resolvectl status | grep -A2 'DNS Servers'   # 使っている DNS サーバー
+    ip route | grep default                      # デフォルトゲートウェイ
+
+  ・8.8.8.8 には届くのに pypi.org に届かない → DNS サーバーの設定がありません。
+    固定 IP にしている場合は /etc/netplan/ の設定ファイルに nameservers を
+    追加して、sudo netplan apply を実行してください。
+  ・8.8.8.8 にも届かない → LAN ケーブル・ゲートウェイ (ルーター) の設定を
+    確認してください。
+
+  プロキシや社内ミラーを使う環境で、この確認だけを省く場合は
+  SKIP_NETCHECK=1 を付けて実行してください (例: sudo SKIP_NETCHECK=1 bash ...)。
+NETHELP
+    exit 1
+}
+# --- netcheck: end ---
+
+# --- pipfix: begin (install_all.sh にも同じものがある) ---
+# pip は自前の証明書一覧 (certifi) を同梱しており、OS の証明書を更新しても
+# それを使い続ける。2026-10 の eMudhra/emSign 認証局の事故で失効した
+# 証明書が、pip 26.2.2 より前の同梱一覧には残っている (第三者が PyPI との
+# 通信に割り込む「なりすまし」の余地がある)。26.2.2 未満なら入れ替える。
+# 入れ替えは古い pip 自身が行うため、PyPI 公開値の SHA256 で中身を照合し、
+# 通信を差し替えられても偽物は入らないようにする。
+PIP_FIXED_VERSION="26.2.2"
+PIP_FIXED_SHA256_WHL="fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+PIP_FIXED_SHA256_SDIST="3a8e5c800492787f33a4114ef54444546c340df428974ebba17e0fd47e11af2f"
+ensure_pip_fixed() {
+    local py="$1" req rc
+    if "$py" - "$PIP_FIXED_VERSION" <<'PYVER' 2>/dev/null
+import sys
+from importlib.metadata import version
+
+
+def key(v):
+    out = []
+    for part in v.split("."):
+        digits = "".join(c for c in part if c.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
+sys.exit(0 if key(version("pip")) >= key(sys.argv[1]) else 1)
+PYVER
+    then
+        return 0
+    fi
+    req="$(mktemp)"
+    printf 'pip==%s --hash=sha256:%s --hash=sha256:%s\n' \
+        "$PIP_FIXED_VERSION" "$PIP_FIXED_SHA256_WHL" "$PIP_FIXED_SHA256_SDIST" > "$req"
+    rc=0
+    "$py" -m pip install -q --disable-pip-version-check --require-hashes -r "$req" || rc=$?
+    rm -f "$req"
+    return "$rc"
+}
+# --- pipfix: end ---
+
+
 [ "$(id -u)" -eq 0 ] || err "root で実行してください:  sudo bash $0"
 [ -d "$INSTALL_DIR" ] || err "インストール先が見つかりません: $INSTALL_DIR"
 [ -x "$INSTALL_DIR/.venv/bin/pip" ] || err "$INSTALL_DIR/.venv がありません。新規インストールは install_all.sh を使ってください。"
@@ -72,6 +173,11 @@ NEW_VER="$(sed -n 's/^version = "\(.*\)"/\1/p' "$SRC_APP/pyproject.toml" | head 
 OLD_VER="$(sed -n 's/^version = "\(.*\)"/\1/p' "$INSTALL_DIR/pyproject.toml" 2>/dev/null | head -1)"
 echo "  現在の版 : ${OLD_VER:-不明}"
 echo "  新しい版 : ${NEW_VER:-不明}"
+
+# 依存ライブラリの取得にはインターネットが要る。サービスを止める前に確かめ、
+# 届かないなら何も変えずに終える (止めたまま失敗して画面が使えなくなるのを防ぐ)。
+log "事前確認  インターネット接続"
+check_network
 
 # -----------------------------------------------------------------------------
 log "2/6  バックアップ"
@@ -119,6 +225,12 @@ fi
 echo "  配布版 : $EDITION   Python : $("$INSTALL_DIR/.venv/bin/python" -V 2>&1)"
 
 cd "$INSTALL_DIR"
+# 既存の venv の pip が、失効した証明書を同梱した古い版なら入れ替える
+if ensure_pip_fixed "$INSTALL_DIR/.venv/bin/python"; then
+    ok "pip: $("$INSTALL_DIR/.venv/bin/python" -m pip --version 2>/dev/null | awk '{print $2}') (証明書の問題に対応済みの版)"
+else
+    warn "pip を ${PIP_FIXED_VERSION} に更新できませんでした (このまま続行します)。"
+fi
 if ! "$INSTALL_DIR/.venv/bin/pip" install -q -c "$LOCK" -e ".${EXTRAS}" 2>/tmp/pip_update_err.log; then
     tail -15 /tmp/pip_update_err.log | sed 's/^/    /'
     warn "依存ライブラリの更新に失敗しました。サービスは元のライブラリのまま起動します。"

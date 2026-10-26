@@ -1,4 +1,4 @@
-# バージョン一覧 — Raspberry Pi 版 (v0.9.0)
+# バージョン一覧 — Raspberry Pi 版 (v0.9.3)
 
 Raspberry Pi 2 Model B (32bit ARM / armv7l) の **Ubuntu Server 22.04 LTS (armhf)** 向けの配布物です。
 
@@ -15,7 +15,7 @@ Raspberry Pi 2 Model B (32bit ARM / armv7l) の **Ubuntu Server 22.04 LTS (armhf
 
 | 項目 | 版 | 備考 |
 |---|---|---|
-| Asterisk PBX Web Management | 0.9.0 | |
+| Asterisk PBX Web Management | 0.9.3 | |
 | Asterisk | 22 系 | `install_all.sh` がインストール時点の最新 22.x をソースからビルド。動作確認: 22.10.1 / 22.11.0 |
 | Python | `3.10.12-1~22.04.18` (OS 標準の 3.10) | 正式版の 3.11 があればそちらを優先 (下記) |
 

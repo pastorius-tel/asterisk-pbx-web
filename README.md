@@ -130,6 +130,12 @@ Raspberry Pi 版の構成に切り替えます。git clone した場合は CPU �
 所要時間は Asterisk のビルドを含めて 20〜40 分程度です
 (Raspberry Pi ではさらにかかります)。
 
+開始前に、apt の取得元と PyPI へ届くか (名前解決を含む) を確認します。
+届かない場合は何も変更せずに止まり、原因の調べ方を表示します。
+よくある原因は、固定 IP にしたときに netplan の `nameservers` (DNS
+サーバー) を書き忘れていることです。`update_app.sh` も同じ確認を、
+サービスを止める前に行います。
+
 主なオプション:
 
 ```bash
@@ -141,6 +147,9 @@ sudo SKIP_ASTERISK=1 bash install_all.sh
 
 # Samba / ufw の設定を飛ばす
 sudo SKIP_SAMBA=1 SKIP_UFW=1 bash install_all.sh
+
+# 開始前のインターネット接続確認を省く (プロキシや社内ミラーを使う環境向け)
+sudo SKIP_NETCHECK=1 bash install_all.sh
 
 # 使う Python を指定する
 sudo PYTHON=python3.11 bash install_all.sh

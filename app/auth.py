@@ -29,7 +29,6 @@ import hmac
 import logging
 import secrets
 import time
-from dataclasses import dataclass, field
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -39,6 +38,24 @@ from app.config import settings
 log = logging.getLogger(__name__)
 
 SESSION_KEY = "pbx_user"
+# ログイン時点の資格情報 (ユーザー名 + パスワード設定) の指紋。
+# .env のパスワードを変えたら、それ以前のセッションを無効にするために使う。
+_FP_KEY = "pbx_cred"
+
+# セッション Cookie の署名鍵 (main.py が起動時に設定する)。
+# 指紋の計算に使い、Cookie を読まれてもパスワードを推測できないようにする。
+_session_key: bytes = b""
+
+
+def set_session_key(key: str) -> None:
+    global _session_key
+    _session_key = key.encode("utf-8")
+
+
+def _credential_fingerprint() -> str:
+    """現在の資格情報の指紋 (署名鍵つき HMAC。Cookie から逆算できない)。"""
+    msg = f"{settings.admin_user}\0{_stored_secret()}".encode()
+    return hmac.new(_session_key or b"-", msg, hashlib.sha256).hexdigest()[:32]
 
 # 認証なしでアクセスできるパス。
 #   /login    : ログイン画面そのもの
@@ -126,42 +143,77 @@ def check_credentials(username: str, password: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class _Attempts:
-    count: int = 0
-    blocked_until: float = 0.0
-
-
-@dataclass
 class LoginThrottle:
     """IP ごとの失敗回数を数え、一定回数を超えたら一時的に拒否する。
 
-    プロセス内のメモリのみで管理する。gunicorn を複数ワーカーで動かすと
-    ワーカーごとの数え方になるが、それでも総当たりの速度は桁で落ちる。
-    (本格的な保護が要る場合はリバースプロキシ側で制限する前提。)
+    回数は DB (login_attempts) に置く。gunicorn の全ワーカーで共有され、
+    再起動しても消えない (以前はワーカーごとのメモリだったため、
+    2 ワーカーなら実質 2 倍の回数を試せ、再起動で 0 に戻っていた)。
     """
 
     max_attempts: int = 8
     block_seconds: float = 300.0
-    _by_ip: dict[str, _Attempts] = field(default_factory=dict)
+    window_seconds: float = 900.0
+    """最後の失敗からこの秒数が過ぎたら、それまでの失敗は数えない。"""
 
-    def blocked_for(self, ip: str) -> int:
-        st = self._by_ip.get(ip)
-        if st is None:
-            return 0
-        remain = st.blocked_until - time.monotonic()
-        return int(remain) if remain > 0 else 0
+    async def blocked_for(self, ip: str) -> int:
+        from app.database import AsyncSessionLocal
+        from app.models import LoginAttempt
 
-    def record_failure(self, ip: str) -> None:
-        st = self._by_ip.setdefault(ip, _Attempts())
-        st.count += 1
-        if st.count >= self.max_attempts:
-            st.blocked_until = time.monotonic() + self.block_seconds
-            st.count = 0
-            log.warning("ログイン失敗が続いたため %s を一時的に拒否します。", ip)
+        async with AsyncSessionLocal() as db:
+            row = await db.get(LoginAttempt, ip)
+            if row is None:
+                return 0
+            remain = (row.blocked_until or 0.0) - time.time()
+            return int(remain) + 1 if remain > 0 else 0
 
-    def record_success(self, ip: str) -> None:
-        self._by_ip.pop(ip, None)
+    async def record_failure(self, ip: str) -> None:
+        from sqlalchemy.exc import IntegrityError
+
+        from app.database import AsyncSessionLocal
+        from app.models import LoginAttempt
+
+        now = time.time()
+        # 同じ新規 IP から同時に失敗が届くと、両方が「行が無い」と判断して
+        # INSERT しようとし、主キー衝突 (IntegrityError) で片方が 500 に
+        # なりうる (しかもその失敗は数えられない)。衝突したらロールバック
+        # して「行がある」前提で数回やり直す。
+        for _ in range(4):
+            try:
+                async with AsyncSessionLocal() as db:
+                    row = await db.get(LoginAttempt, ip)
+                    if row is None:
+                        row = LoginAttempt(
+                            ip=ip, failures=0, blocked_until=0.0, last_failure=0.0
+                        )
+                        db.add(row)
+                    if now - (row.last_failure or 0.0) > self.window_seconds:
+                        row.failures = 0
+                    row.failures = (row.failures or 0) + 1
+                    row.last_failure = now
+                    if row.failures >= self.max_attempts:
+                        row.blocked_until = now + self.block_seconds
+                        row.failures = 0
+                        log.warning(
+                            "ログイン失敗が続いたため %s を一時的に拒否します。", ip
+                        )
+                    await db.commit()
+                return
+            except IntegrityError:
+                # 別のワーカーが先に同じ行を作った。やり直すと db.get が
+                # その行を拾い、更新側の経路を通る。
+                continue
+        log.warning("ログイン失敗の記録に繰り返し失敗しました (%s)。", ip)
+
+    async def record_success(self, ip: str) -> None:
+        from app.database import AsyncSessionLocal
+        from app.models import LoginAttempt
+
+        async with AsyncSessionLocal() as db:
+            row = await db.get(LoginAttempt, ip)
+            if row is not None:
+                await db.delete(row)
+                await db.commit()
 
 
 throttle = LoginThrottle()
@@ -186,7 +238,14 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
         return await call_next(request)
 
     if request.session.get(SESSION_KEY):
-        return await call_next(request)
+        # パスワード (またはユーザー名) を変えた後は、それ以前のセッションを
+        # 通さない。Cookie は署名付きで改ざんはできないが、サーバー側に
+        # 失効の仕組みが無いため、資格情報の指紋で古いものを弾く。
+        if hmac.compare_digest(
+            str(request.session.get(_FP_KEY, "")), _credential_fingerprint()
+        ):
+            return await call_next(request)
+        request.session.clear()
 
     # htmx / fetch からの呼び出しにリダイレクトを返すと画面内に
     # ログインフォームが埋め込まれてしまうので、その場合は 401 を返す。
@@ -210,7 +269,9 @@ def _quote(value: str) -> str:
 
 
 def login_user(request: Request) -> None:
+    request.session.clear()
     request.session[SESSION_KEY] = settings.admin_user
+    request.session[_FP_KEY] = _credential_fingerprint()
     # ログイン成功のたびにセッション ID を作り直す
     # (セッション固定化攻撃の対策)
     request.session["sid"] = secrets.token_urlsafe(16)
