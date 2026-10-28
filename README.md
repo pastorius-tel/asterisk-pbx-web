@@ -38,6 +38,10 @@ SIP や Asterisk の設定ファイル記法を覚えていなくても運用で
 - 既定では **IP アドレス直打ちと localhost からのみ**アクセスできます
   (DNS リバインディング対策)。独自のホスト名で使う場合は `.env` の
   `ALLOWED_HOSTS` にその名前を追加してください
+- Web 画面のサービスと Asterisk 本体は **root ではなく asterisk ユーザーで動かしてください**。
+  古い版のころに手作業で導入し、root で動いている場合は、同梱の
+  `scripts/switch_asterisk_user.sh` (Asterisk 本体) と `scripts/switch_service_user.sh`
+  (Web 画面) で切り替えられます (下の「root で動いているサービスを切り替える」)
 
 詳細は [SECURITY.md](SECURITY.md) を参照してください。
 
@@ -236,7 +240,9 @@ sudo APP_ZIP=~/asterisk-pbx-web-x.y.z.zip bash /tmp/asterisk-pbx-web/scripts/upd
 4. systemd ユニットを新しい起動方法に合わせる (必要な場合のみ)
 5. サービスを起動
 
-インストール先を変えている場合は `INSTALL_DIR=/opt/asterisk-pbx-web` を付けます。
+インストール先と実行ユーザーは、動いているサービスの設定 (`WorkingDirectory=` /
+`User=`) から自動で決まります。サービスが無い場合など、自動で決まらないときは
+`INSTALL_DIR=/opt/asterisk-pbx-web` のように指定してください。
 
 **最後に、Web 画面を開いて左下の「変更を Asterisk へ反映」を必ず 1 回押してください。**
 ダイヤルプラン (`extensions.conf` など) は、このボタンを押したときに初めて
@@ -278,6 +284,69 @@ cd "$INSTALL_DIR"
 sudo -u asterisk git pull
 sudo bash scripts/update_app.sh
 ```
+
+### D. root で動いているサービスを切り替える
+
+古い版のころに手作業で導入した環境では、Web 画面のサービスや Asterisk 本体が
+root で動いていることがあります。万一弱点があった場合、root のままだとサーバー
+全体を操作されるおそれがあるため、asterisk ユーザーで動かすように切り替えて
+ください。確認は次のコマンドでできます。
+
+```bash
+systemctl cat asterisk-pbx-web | grep User=     # Web 画面 (User=root なら切り替え対象)
+ps -o user= -C asterisk | sort -u               # Asterisk 本体 (root なら切り替え対象)
+```
+
+どちらのスクリプトも、何も付けずに実行すると**確認だけ**を行い、何をどう変えるかを
+一覧で表示します。`APPLY=1` を付けると切り替え、`ROLLBACK=1` で元に戻します。
+問題があるときは何も変えずに止まり、理由 (NG) を表示します。
+
+#### 1. Asterisk 本体 (`scripts/switch_asterisk_user.sh`)
+
+Asterisk 本体が root で動いている場合は、こちらを先に行います
+(Web 画面だけを先に切り替えることはできません)。**Asterisk を再起動するため、
+通話が切れ、再起動が終わるまで (数十秒) 電話が使えません。** 通話の少ない時間帯に
+行ってください。通話中は自動で中止します。
+
+```bash
+cd "$INSTALL_DIR"
+sudo bash scripts/switch_asterisk_user.sh            # 確認だけ
+sudo APPLY=1 bash scripts/switch_asterisk_user.sh    # 切り替える
+```
+
+1. Asterisk を止める
+2. Asterisk が書き込む場所 (`/etc/asterisk`・`/var/lib/asterisk`・`/var/spool/asterisk`・
+   `/var/log/asterisk` など) の持ち主を asterisk にする
+3. `asterisk.conf` の `[options]` に `runuser` / `rungroup = asterisk` を書く
+   (元のファイルは `asterisk.conf.bak-日時` で残す)。起動方法に関係なく、
+   Asterisk 自身が起動直後に asterisk へ切り替わります
+4. 起動して、asterisk で動いていること・回線の登録が戻ったことを確かめる。
+   戻らなければ自動で root に戻す
+
+証明書 (TLS) や保留音のフォルダを asterisk が読めない場合、1024 未満のポートで
+待ち受ける設定がある場合は、切り替えずに止まります。
+
+#### 2. Web 画面 (`scripts/switch_service_user.sh`)
+
+```bash
+cd "$INSTALL_DIR"
+sudo bash scripts/switch_service_user.sh            # 確認だけ
+sudo APPLY=1 bash scripts/switch_service_user.sh    # 切り替える
+```
+
+1. `.env` と `pbx.db` をバックアップ
+2. インストール先の持ち主を asterisk にする
+3. 本ツールが書き込む Asterisk 側の場所 (`/etc/asterisk`・音源・留守番電話・FAX の
+   スプールなど) に、asterisk が書き込めるよう権限を付ける (足りない場所だけ)
+4. systemd の追加設定ファイル
+   (`/etc/systemd/system/asterisk-pbx-web.service.d/50-run-as-service-user.conf`)
+   で `User=asterisk` にし、`NoNewPrivileges` などで権限を絞る。元のユニット
+   ファイルは書き換えません
+5. 起動して画面が応答するか確かめる。応答しなければ自動で元に戻す
+
+インストール先が `/home` の下などにあり、asterisk がその手前のフォルダを通れない
+場合は、そのフォルダの「通過」だけを ACL で許可します (`acl` パッケージが必要です)。
+Web 画面が十数秒止まりますが、通話には影響しません。
 
 ---
 

@@ -11,6 +11,9 @@
 #   sudo APP_ZIP=~/asterisk-pbx-web-0.8.0.zip bash update_app.sh
 #   sudo INSTALL_DIR=/opt/asterisk-pbx-web bash update_app.sh
 #
+# インストール先と実行ユーザーは、指定しなければ動いているサービスの
+# 設定 (WorkingDirectory= / User=) から自動で決まる。
+#
 # 行うこと:
 #   1. .env と pbx.db をバックアップ (*.bak-日時)
 #   2. サービスを停止
@@ -31,9 +34,28 @@ fi
 
 set -euo pipefail
 
-INSTALL_DIR="${INSTALL_DIR:-/var/www/asterisk-pbx-web}"
-RUN_USER="${RUN_USER:-asterisk}"
 UNIT="${UNIT:-/etc/systemd/system/asterisk-pbx-web.service}"
+
+# インストール先と実行ユーザーは、指定が無ければ動いているサービスの
+# 設定 (WorkingDirectory= / User=) から読み取る。サービスが root 以外で
+# 動いているのに別のユーザーを RUN_USER に指定すると、最後の chown で
+# サービスがデータベースや設定に書き込めなくなるため、下で止める。
+_unit_prop() { systemctl show -p "$1" --value asterisk-pbx-web 2>/dev/null || true; }
+if [ -z "${INSTALL_DIR:-}" ]; then
+    INSTALL_DIR="$(_unit_prop WorkingDirectory)"
+    INSTALL_DIR="${INSTALL_DIR#[-!]}"
+    if [ -z "$INSTALL_DIR" ] || [ ! -f "$INSTALL_DIR/pyproject.toml" ]; then
+        INSTALL_DIR="/var/www/asterisk-pbx-web"
+    fi
+fi
+UNIT_USER="$(_unit_prop User)"
+if [ -z "${RUN_USER:-}" ]; then
+    if [ -n "$UNIT_USER" ] && [ "$UNIT_USER" != "root" ]; then
+        RUN_USER="$UNIT_USER"
+    else
+        RUN_USER="asterisk"
+    fi
+fi
 
 log()  { echo -e "\n\033[1;36m[$(date '+%H:%M:%S')] $*\033[0m"; }
 ok()   { echo -e "  \033[1;32m OK \033[0m $*"; }
@@ -142,6 +164,9 @@ PYVER
 
 
 [ "$(id -u)" -eq 0 ] || err "root で実行してください:  sudo bash $0"
+if [ -n "$UNIT_USER" ] && [ "$UNIT_USER" != "root" ] && [ "$RUN_USER" != "$UNIT_USER" ]; then
+    err "RUN_USER=${RUN_USER} が指定されていますが、サービスは ${UNIT_USER} で動いています。このまま進めると、サービスがデータベースや設定に書き込めなくなります。RUN_USER を付けずに実行してください。"
+fi
 [ -d "$INSTALL_DIR" ] || err "インストール先が見つかりません: $INSTALL_DIR"
 [ -x "$INSTALL_DIR/.venv/bin/pip" ] || err "$INSTALL_DIR/.venv がありません。新規インストールは install_all.sh を使ってください。"
 
@@ -171,6 +196,8 @@ fi
 
 NEW_VER="$(sed -n 's/^version = "\(.*\)"/\1/p' "$SRC_APP/pyproject.toml" | head -1)"
 OLD_VER="$(sed -n 's/^version = "\(.*\)"/\1/p' "$INSTALL_DIR/pyproject.toml" 2>/dev/null | head -1)"
+echo "  インストール先 : ${INSTALL_DIR}"
+echo "  実行ユーザー   : ${RUN_USER}"
 echo "  現在の版 : ${OLD_VER:-不明}"
 echo "  新しい版 : ${NEW_VER:-不明}"
 

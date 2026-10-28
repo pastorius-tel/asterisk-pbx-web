@@ -80,9 +80,20 @@ async def record_call(
     billsec: str = Query(""),
     uniqueid: str = Query(""),
     start: str = Query(""),
+    answered: str = Query(""),
+    talk: str = Query(""),
+    start_epoch: str = Query(""),
+    end_epoch: str = Query(""),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Asterisk から通話終了の通知を受けて履歴を 1 件記録する。"""
+    """Asterisk から通話終了の通知を受けて履歴を 1 件記録する。
+
+    応答の有無・通話秒数・開始時刻は、ダイヤルプランが自前で控えた値
+    (answered / talk / start_epoch / end_epoch) を優先して使う。
+    内線側が先に電話を切った通話では、Asterisk の CDR が通話後の新しい
+    区間に切り替わり、CDR の値が「不応答・0 秒」になってしまうため。
+    旧版のダイヤルプラン (これらの値が無い) では従来どおり CDR を使う。
+    """
     await verify_hook(request, db, "calllog", token)
     if direction not in ("in", "out"):
         return {"ok": False, "reason": "invalid direction"}
@@ -104,13 +115,32 @@ async def record_call(
         if exists is not None:
             return {"ok": True, "skipped": "duplicate"}
 
-    # 開始日時: Asterisk の CDR(start) は "YYYY-MM-DD HH:MM:SS" 形式
+    # 開始日時: ダイヤルプランが控えた着信時刻 (UNIX 時刻) を優先する。
+    # 無ければ CDR(start) ("YYYY-MM-DD HH:MM:SS" 形式)。
     started = datetime.now()
-    if start:
+    t_start = _parse_int(start_epoch)
+    t_end = _parse_int(end_epoch)
+    if t_start and t_start > 0:
+        try:
+            started = datetime.fromtimestamp(t_start)
+        except (OverflowError, OSError, ValueError):
+            t_start = None
+    if not t_start and start:
         try:
             started = datetime.strptime(start.strip(), "%Y-%m-%d %H:%M:%S")
         except ValueError:
             pass
+
+    # 応答の有無と秒数
+    duration_s = _parse_int(duration)
+    billsec_s = _parse_int(billsec)
+    if t_start and t_end and t_end >= t_start:
+        duration_s = t_end - t_start
+    if answered.strip() == "1":
+        disposition = "ANSWERED"
+        talk_s = _parse_int(talk)
+        if talk_s is not None and talk_s >= 0:
+            billsec_s = talk_s
 
     db.add(CallLog(
         direction=direction,
@@ -122,8 +152,8 @@ async def record_call(
         dest_value=(dest_value or None),
         dest_label=(dest_label or None),
         disposition=(disposition or None),
-        duration_seconds=_parse_int(duration),
-        billable_seconds=_parse_int(billsec),
+        duration_seconds=duration_s,
+        billable_seconds=billsec_s,
         uniqueid=(uniqueid or None),
         trunk_name=(trunk or None),
         is_blocked=(blocked == "1"),

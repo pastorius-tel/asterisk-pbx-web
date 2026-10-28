@@ -82,7 +82,7 @@ LAN の内側だけに開くようにしてください (インストーラの u
 | 外部依存 | htmx を同梱し、外部 CDN からスクリプトを読み込まない (閉じた LAN でも動き、配信内容の差し替えも受けない) |
 | 証明書 | 本ツール自身の外向き通信 (メール送信・祝日データ・音響モデルの取得) は OS の証明書 (`ca-certificates`) で検証する。Python ライブラリの取得に使う pip は独自の証明書一覧を同梱しているため、インストール・更新のたびに 2026-10 の eMudhra/emSign 認証局の事故に対応した版 (26.2.2 以上) へ、PyPI 公開値の SHA256 で照合して入れ替える |
 | 一時ファイル | `.env` に `SECRET_KEY` が無い場合のセッション鍵 (`.session_secret`) と、起動時の初期化ロックは、DB と同じディレクトリに `0600` で作る。共有の `/tmp` に固定名で置くと、同名のシンボリックリンクを先に置かれてリンク先を切り詰められる (/tmp シンボリックリンク攻撃)。`O_NOFOLLOW` でリンクも辿らない |
-| 権限の最小化 | 本ツールは root では動かさない前提。日本語音声のインストールもサービス実行ユーザーのまま行う (以前は root を要求していた)。systemd のサービス定義では `NoNewPrivileges` / `PrivateTmp` / `ProtectSystem` 等で権限を絞る。不足している権限は「システム」画面の「ファイル権限の診断」で確認できる |
+| 権限の最小化 | 本ツールは root では動かさない前提。日本語音声のインストールもサービス実行ユーザーのまま行う (以前は root を要求していた)。systemd のサービス定義では `NoNewPrivileges` / `PrivateTmp` / `ProtectSystem` 等で権限を絞る。不足している権限は「システム」画面の「ファイル権限の診断」で確認できる。古い版で手作業で導入し root で動いている環境は、`scripts/switch_asterisk_user.sh` (Asterisk 本体) と `scripts/switch_service_user.sh` (Web 画面。同じ権限の絞り込みも加わる) で asterisk ユーザーに切り替えられる |
 | ヘッダー | `Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` を付与 |
 
 ## 想定していないこと

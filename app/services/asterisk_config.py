@@ -32,6 +32,7 @@ Asterisk を素インストール後、以下を実行すれば全 conf がこ�
 
 from __future__ import annotations
 
+import contextvars
 import io
 import logging
 import re
@@ -273,6 +274,11 @@ def _calllog_hangup_handler_context(hook_token: str) -> str:
     ${CDR(...)} から通話時間や応答状況を取れるため、CSV (Master.csv) を
     解析しなくても必要な情報が揃う。着信先 (内線 / 留守電 / FAX 等) は
     ダイヤルプラン側で __CL_DEST_* にセットしておく。
+
+    ただし Dial() で人が応答した通話は、CDR の値がハングアップの順番や
+    タイミングで揺れるため、DIALSTATUS / ANSWEREDTIME と着信・切断時刻
+    (CL_START / EPOCH) を併せて送り、受信側 (call_logs.record_call) で
+    そちらを優先する。
     """
     hook_url = (
         f"http://127.0.0.1:{settings.port}/call-logs/hook/record"
@@ -283,6 +289,15 @@ def _calllog_hangup_handler_context(hook_token: str) -> str:
         "dest=${CL_DEST_TYPE}:${CL_DEST_VALUE})\n"
         # 方向が未設定のチャネル (内部処理用など) は記録しない
         ' same => n,GotoIf($["${CL_DIRECTION}" = ""]?skip)\n'
+        # 応答済みの通話を発信者側が切った場合、ハングアップハンドラー
+        # 実行時点の ${CDR(disposition)} は CDR エンジンの処理タイミング
+        # 次第で "NO ANSWER" / billsec=0 (ブリッジ後の新しい区間) になる
+        # ことがある (実機検証済み)。Dial() がチャネルに残す DIALSTATUS /
+        # ANSWEREDTIME はタイミングに左右されないので、こちらを優先する。
+        ' same => n,ExecIf($["${DIALSTATUS}" = "ANSWER" & "${CL_ANSWERED}" = ""]'
+        "?Set(CL_ANSWERED=1))\n"
+        ' same => n,ExecIf($["${DIALSTATUS}" = "ANSWER" & "${CL_TALKSEC}" = ""]'
+        "?Set(CL_TALKSEC=${ANSWEREDTIME}))\n"
         " same => n,System(curl -s -m 20 -G "
         f"-H '{HOOK_TOKEN_HEADER}: {hook_token}' '{hook_url}' "
         # direction / dest_type / blocked はこちらが固定語をセットする値、
@@ -302,7 +317,13 @@ def _calllog_hangup_handler_context(hook_token: str) -> str:
         "--data-urlencode 'duration=${CDR(duration)}' "
         "--data-urlencode 'billsec=${CDR(billsec)}' "
         "--data-urlencode 'uniqueid=${UNIQUEID}' "
-        "--data-urlencode 'start=${CDR(start)}')\n"
+        "--data-urlencode 'start=${CDR(start)}' "
+        # 内線が応答したか・実際に話した秒数 (_AFTER_DIAL_ACTIONS が控える)
+        # と、着信時刻・切断時刻 (UNIX 時刻)。いずれも数字だけの値。
+        "--data-urlencode 'answered=${CL_ANSWERED}' "
+        "--data-urlencode 'talk=${CL_TALKSEC}' "
+        "--data-urlencode 'start_epoch=${CL_START}' "
+        "--data-urlencode 'end_epoch=${EPOCH}')\n"
         " same => n,Return()\n"
         " same => n(skip),Return()\n\n"
     )
@@ -321,6 +342,9 @@ def _calllog_setup_actions(
     """
     acts = [
         f"Set(__CL_DIRECTION={direction})",
+        # 着信 (発信) した時刻。通話が終わると CDR が新しい区間に切り替わり
+        # CDR(start) が通話後の時刻になることがあるため、自前で控える。
+        "Set(__CL_START=${EPOCH})",
         f"Set(__CL_PEER={peer_expr})",
         "Set(__CL_PEER_NAME=${CALLERID(name)})",
     ]
@@ -1133,6 +1157,7 @@ def _inbound_route_to_dialplan(
     context_name: str = "",
     vm_only: set[str] | None = None,
     no_answer_exts: dict[str, list[str]] | None = None,
+    trunk_name: str = "",
 ) -> str:
     did = route.did_number or "_X."
     vm_only = vm_only or set()
@@ -1175,6 +1200,8 @@ def _inbound_route_to_dialplan(
     elif dest == "queue":
         actions.append(f"Goto(queue-{_ident(val)},s,1)")
     elif dest == "voicemail":
+        # 留守番電話の案内を流す前に、FAX かどうかを見極める
+        actions.extend(_cng_wait_actions())
         if val in vm_only:
             # 留守番電話専用内線なら応答メッセージの再生から通す
             actions.append(f"Goto(from-internal,{val},1)")
@@ -1212,15 +1239,43 @@ def _inbound_route_to_dialplan(
     )
 
     body = "\n".join(f" same => n,{a}" for a in actions)
+    # 発着信履歴の記録を仕込む (着信の一番最初、迷惑電話の判定より前)。
+    # ひかり電話以外のトランク (REGISTER / IP-PEER) では、以前はこれが無く
+    # 着信が履歴に残っていなかった。発信者名は、接頭辞を付ける前のものを
+    # 控えるため {cid} より先に置く。かかってきた番号は ${EXTEN}。
+    setup = "".join(
+        f"\n same => n,{a}"
+        for a in _calllog_setup_actions(
+            "in", "${CALLERID(num)}", did_expr="${EXTEN}", trunk=trunk_name,
+        )
+    )
     return f"""
 ;=== 着信ルート: {_text(route.name)} ===
-exten => {did},1,NoOp(INBOUND {_text(route.name)}){cid}{lang}{rec}
+exten => {did},1,NoOp(INBOUND {_text(route.name)}){setup}{cid}{lang}{rec}
 {nuisance}{body}
  same => n,Hangup()
 """
 
 
 async def render_extensions_conf(db: AsyncSession) -> str:
+    """extensions.conf を生成する。
+
+    FAX の CNG 検知の待ち時間 (_CNG_WAIT) を、生成の間だけ FAX 設定の値に
+    しておく。FAX 機能が無効なら 0 (待たない)。
+    """
+    _fax = (await db.scalars(select(FaxConfig))).first()
+    wait = (
+        int(_fax.cng_detect_wait_seconds or 0)
+        if _fax is not None and _fax.enabled else 0
+    )
+    token = _CNG_WAIT.set(max(0, min(10, wait)))
+    try:
+        return await _render_extensions_conf_body(db)
+    finally:
+        _CNG_WAIT.reset(token)
+
+
+async def _render_extensions_conf_body(db: AsyncSession) -> str:
     out = io.StringIO()
     out.write(_HEADER)
 
@@ -1438,16 +1493,19 @@ async def render_extensions_conf(db: AsyncSession) -> str:
     out.write(f"exten => _{_lead}XX,1,NoOp(Internal call to ${{EXTEN}})\n")
     out.write(_voicemail_hook_setup_lines("${EXTEN}"))
     out.write(f" same => n,Dial(PJSIP/${{EXTEN}},{_ring_secs},TtkKg)\n")
+    out.write(_AFTER_DIAL_LINES)
     out.write(" same => n,VoiceMail(${EXTEN}@default,u)\n")
     out.write(" same => n,Hangup()\n\n")
     out.write(f"exten => _{_lead}XXX,1,NoOp(Internal call to ${{EXTEN}})\n")
     out.write(_voicemail_hook_setup_lines("${EXTEN}"))
     out.write(f" same => n,Dial(PJSIP/${{EXTEN}},{_ring_secs},TtkKg)\n")
+    out.write(_AFTER_DIAL_LINES)
     out.write(" same => n,VoiceMail(${EXTEN}@default,u)\n")
     out.write(" same => n,Hangup()\n\n")
     out.write(f"exten => _{_lead}XXXX,1,NoOp(Internal call to ${{EXTEN}})\n")
     out.write(_voicemail_hook_setup_lines("${EXTEN}"))
     out.write(f" same => n,Dial(PJSIP/${{EXTEN}},{_ring_secs},TtkKg)\n")
+    out.write(_AFTER_DIAL_LINES)
     out.write(" same => n,VoiceMail(${EXTEN}@default,u)\n")
     out.write(" same => n,Hangup()\n\n")
 
@@ -1539,6 +1597,9 @@ async def render_extensions_conf(db: AsyncSession) -> str:
     # ↑ この include は _fax_safety_include() で各コンテキストへ入れる。
     if fax_cfg is not None and fax_cfg.enabled:
         out.write("exten => fax,1,NoOp(CNG detected -> FAX受信へ)\n")
+        # 呼び出し音 (_cng_wait_actions の Playtones) を流している最中に検知
+        # されることがあるため、FAX の信号に混ざらないよう必ず止める
+        out.write(" same => n,StopPlaytones()\n")
         # 迷惑電話としてブロック中の通話は、FAX 受信へ回さずそのまま切る。
         #
         # 「メッセージを流してから切断」を選ぶと通話に応答するため、
@@ -1586,7 +1647,7 @@ async def render_extensions_conf(db: AsyncSession) -> str:
         await db.scalars(
             select(InboundRoute)
             .where(InboundRoute.enabled.is_(True))
-            .order_by(InboundRoute.priority)
+            .order_by(InboundRoute.priority, InboundRoute.id)
         )
     ).all()
 
@@ -1599,12 +1660,21 @@ async def render_extensions_conf(db: AsyncSession) -> str:
                 vm_only_numbers, no_answer_map,
             ))
         else:
+            # 同じ番号の着信ルートが複数あるときは、優先順位の小さいもの
+            # (先頭) だけを出力する。同じ exten を 2 回書くと Asterisk は
+            # 後のものを読み捨てて警告を出すため、ここで揃えておく。
+            _seen_dids: set[str] = set()
             for ib in inbounds:
+                _key = (ib.did_number or "").strip() or "_X."
+                if _key in _seen_dids:
+                    continue
+                _seen_dids.add(_key)
                 out.write(_inbound_route_to_dialplan(
                     ib, system_language, app_settings_row, has_blocklist,
                     context_name=f"from-trunk-{_ident(t.name)}",
                     vm_only=vm_only_numbers,
                     no_answer_exts=no_answer_map,
+                    trunk_name=t.name,
                 ))
             # fax_detect=yes がCNGトーンを検知した際のジャンプ先安全網。
             # 共通の [fax-safety-net] を include (理由は hikari 側の
@@ -1636,11 +1706,10 @@ async def render_extensions_conf(db: AsyncSession) -> str:
             out.write(f" same => n,{_a}\n")
         out.write(" same => n,Answer()\n")
         if _cng_wait > 0:
-            out.write(
-                f" same => n,Wait({_cng_wait})"
-                f" ; FAX CNG検知の猶予 (鳴音前の一瞬の呼び出しを防止)\n"
-            )
+            # FAX CNG 検知の猶予 (内線が一瞬鳴るのを防ぐ)。待つ間は呼び出し音を流す
+            out.write(_cng_wait_lines(answer=False))
         out.write(f" same => n,Dial({members},{g.ring_seconds},TtkKg)\n")
+        out.write(_AFTER_DIAL_LINES)
         if g.fallback_type and g.fallback_value:
             out.write(_fallback_line(g.fallback_type, g.fallback_value, vm_only_numbers, no_answer_map))
         out.write(" same => n,Hangup()\n")
@@ -1743,6 +1812,7 @@ def _render_internal_exten_with_no_answer(
         f"NoOp(Internal call to {ext.extension} / 応答なし時の個別設定あり)\n"
     )
     out.write(f" same => n,Dial(PJSIP/{ext.extension},{ring_seconds},TtkKg)\n")
+    out.write(_AFTER_DIAL_LINES)
     for a in _no_answer_actions(ext, audio_files):
         out.write(f" same => n,{a}\n")
     out.write(" same => n,Hangup()\n")
@@ -1761,6 +1831,63 @@ def _render_internal_exten_with_no_answer(
 _DIAL_OPTS = "TtkKg"
 
 
+# 内線を呼び出したあとに置く処理。
+#
+# Dial() には g オプション (「呼んだ相手が切ったら、ダイヤルプランの次の
+# 行へ進む」) を付けている。これは電話機が応答しなかったときに、応答なし
+# 時の処理 (留守番電話など) へ進むために必要。ところが g は「通話が成立
+# して、内線側が先に電話を切った」ときにも働き、相手 (外線の発信者) が
+# まだ回線上にいると、次の行の留守番電話の案内が流れてしまっていた。
+#
+# そこで Dial() の直後に、通話が成立していた (DIALSTATUS=ANSWER) 場合は
+# 応答と通話秒数を履歴用に控えてから切断する。応答が無かったときだけ
+# 次の行 (応答なし時の処理) へ進む。通話秒数は ANSWEREDTIME (Dial が
+# 設定する、実際に話していた秒数) を使う。通話が終わったあとは Asterisk
+# の CDR が新しい区間に切り替わり、CDR(billsec) が 0 になってしまうため。
+_AFTER_DIAL_ACTIONS: tuple[str, ...] = (
+    'ExecIf($["${DIALSTATUS}" = "ANSWER"]?Set(__CL_ANSWERED=1))',
+    'ExecIf($["${DIALSTATUS}" = "ANSWER"]?Set(__CL_TALKSEC=${ANSWEREDTIME}))',
+    'ExecIf($["${DIALSTATUS}" = "ANSWER"]?Hangup())',
+)
+_AFTER_DIAL_LINES = "".join(f" same => n,{a}\n" for a in _AFTER_DIAL_ACTIONS)
+
+
+def _join_actions(actions: list[str] | tuple[str, ...]) -> str:
+    """複数の action を「1 つの action 文字列」として返す。
+
+    呼び出し側は先頭に " same => n," や "exten => X,1," を付けて 1 行として
+    書き出すため、2 つ目以降は改行と " same => n," でつないでおく。
+    """
+    return "\n same => n,".join(actions)
+
+
+# FAX の CNG トーン検知のための待ち時間 (秒)。render_extensions_conf() が
+# FAX 設定から読んで設定する (生成のたびに値が変わりうるため、引数で
+# 引き回さずコンテキスト変数で渡す)。
+_CNG_WAIT: contextvars.ContextVar[int] = contextvars.ContextVar("cng_wait", default=0)
+
+
+def _cng_wait_actions(answer: bool = True) -> list[str]:
+    """案内 (IVR・留守番電話・キュー) を流す前に、FAX かどうかを見極める。
+
+    FAX の CNG トーンは、PBX が応答してから届き始める (約 3.5 秒ごと)。
+    応答してすぐ案内を流すと、検知されて FAX 受信へ切り替わるまでの
+    数秒間、FAX 機に案内が流れてしまう。そこで案内の前にこの秒数だけ
+    待つ。待つ間は呼び出し音を流すので、人の発信者には「まだ呼び出し中」
+    に聞こえる。FAX 機能が無効、または待ち時間 0 のときは何もしない。
+    """
+    n = _CNG_WAIT.get()
+    if n <= 0:
+        return []
+    acts = ["Answer()"] if answer else []
+    acts += ["Playtones(ring)", f"Wait({n})", "StopPlaytones()"]
+    return acts
+
+
+def _cng_wait_lines(answer: bool = True) -> str:
+    return "".join(f" same => n,{a}\n" for a in _cng_wait_actions(answer))
+
+
 def _dial_or_voicemail_only(
     number: str, ring_seconds: int, vm_only_numbers: set[str],
 ) -> str:
@@ -1773,7 +1900,8 @@ def _dial_or_voicemail_only(
     """
     if number in vm_only_numbers:
         return f"Goto(from-internal,{number},1)"
-    return f"Dial(PJSIP/{number},{ring_seconds},TtkKg)"
+    # Dial のあとに「通話が成立していたら切断」を続ける (_AFTER_DIAL_ACTIONS)
+    return _join_actions([f"Dial(PJSIP/{number},{ring_seconds},TtkKg)", *_AFTER_DIAL_ACTIONS])
 
 
 def _render_voicemail_only_exten(
@@ -1856,6 +1984,10 @@ def _render_ivr_context(
     for _a in _calllog_dest_actions("ivr", ivr.name, f"IVR {ivr.display_name}"):
         out.write(f" same => n,{_a}\n")
     out.write(" same => n,Answer()\n")
+    # 案内を流す前に、FAX かどうかを見極める。FAX の CNG トーンを検知すると
+    # この待ちの間に FAX 受信へ切り替わり、FAX 機に案内が流れない
+    # (_cng_wait_actions 参照)。人の発信者には呼び出し音が聞こえる。
+    out.write(_cng_wait_lines(answer=False))
     out.write(" same => n,Set(IVR_RETRY=0)\n")
 
     # 挨拶ガイダンス再生 (Background = 鳴らしながらキー待ち)
@@ -1909,8 +2041,14 @@ def _ivr_entry_to_dialplan(entry, vm_only: set[str] | None = None,  # type: igno
         # これが無いと、電話機が起動していない内線へ転送したときに
         # そのまま切断されてしまう (案内も留守番電話も流れない)。
         na = "".join(f" same => n,{a}\n" for a in no_answer_map.get(val, []))
+        # 履歴の着信先を「IVR」から実際の内線へ更新する
+        cl = "".join(
+            f" same => n,{a}\n" for a in _calllog_dest_actions("extension", val, f"内線 {val}")
+        )
         return (
-            f"exten => {key},1,{_dial_or_voicemail_only(val, 30, vm_only)}{label}\n"
+            f"exten => {key},1,NoOp(IVR key {key} -> extension {val}){label}\n"
+            f"{cl}"
+            f" same => n,{_dial_or_voicemail_only(val, 30, vm_only)}\n"
             f"{na}"
             " same => n,Hangup()\n"
         )
@@ -1934,8 +2072,13 @@ def _ivr_entry_to_dialplan(entry, vm_only: set[str] | None = None,  # type: igno
             " same => n,Hangup()\n"
         )
     if action == "playback_hangup":
-        return f"exten => {key},1,Playback({val}){label}\n same => n,Hangup()\n"
-    return f"exten => {key},1,Hangup(){label}\n"
+        cl = "".join(f" same => n,{a}\n" for a in _calllog_dest_actions("hangup", "", "案内のみ"))
+        return (
+            f"exten => {key},1,NoOp(IVR key {key} -> playback){label}\n"
+            f"{cl} same => n,Playback({val})\n same => n,Hangup()\n"
+        )
+    cl = "".join(f" same => n,{a}\n" for a in _calllog_dest_actions("hangup", "", "切断"))
+    return f"exten => {key},1,NoOp(IVR key {key} -> hangup){label}\n{cl} same => n,Hangup()\n"
 
 
 def _ivr_fallback_lines(ivr: Ivr, vm_only: set[str] | None = None,
@@ -1947,7 +2090,9 @@ def _ivr_fallback_lines(ivr: Ivr, vm_only: set[str] | None = None,
     v = ivr.fallback_value or ""
     if a == "extension":
         na = "".join(f" same => n,{x}\n" for x in no_answer_map.get(v, []))
+        cl = "".join(f" same => n,{x}\n" for x in _calllog_dest_actions("extension", v, f"内線 {v}"))
         return (
+            f"{cl}"
             f" same => n,{_dial_or_voicemail_only(v, 30, vm_only)}\n"
             f"{na}"
             " same => n,Hangup()\n"
@@ -1964,7 +2109,8 @@ def _ivr_fallback_lines(ivr: Ivr, vm_only: set[str] | None = None,
             f" same => n,VoiceMail({v}@default)\n"
             " same => n,Hangup()\n"
         )
-    return " same => n,Hangup()\n"
+    cl = "".join(f" same => n,{x}\n" for x in _calllog_dest_actions("hangup", "", "切断"))
+    return f"{cl} same => n,Hangup()\n"
 
 
 #-------------------------------------------------------------------
@@ -2092,6 +2238,7 @@ def _render_fax_context(fax: FaxConfig, hook_token: str) -> str:
     )
     out.write("[fax-receive]\n")
     out.write("exten => fax,1,NoOp(FAX receive start from ${CALLERID(num)})\n")
+    out.write(" same => n,StopPlaytones()\n")
     for _a in _calllog_dest_actions("fax", "", "FAX 受信"):
         out.write(f" same => n,{_a}\n")
     out.write(" same => n,Answer()\n")
@@ -2280,6 +2427,9 @@ def _hikari_did_dispatcher(
     out.write(" same => n,Set(TO_DID=${PJSIP_HEADER(read,To)})\n")
     out.write(" same => n,Set(TO_DID=${CUT(TO_DID,@,1)})\n")
     out.write(" same => n,Set(TO_DID=${CUT(TO_DID,:,2)})\n")
+    # 履歴に「かかってきた番号」を残す (着信ルートの無い番号や、番号を
+    # 指定しない着信ルートを通った場合でも空にならないよう、ここで控える)
+    out.write(" same => n,Set(__CL_DID=${TO_DID})\n")
     out.write(f" same => n,Goto(did-{_ident(t.name)},${{TO_DID}},1)\n\n")
     out.write(
         "; fax_detect=yes (トランクエンドポイント) が通話中に CNG トーン\n"
@@ -2300,10 +2450,13 @@ def _hikari_did_dispatcher(
     out.write(_fax_safety_include())
     inbound_by_did: dict[str, InboundRoute] = {}
     catch_all: InboundRoute | None = None
+    # inbounds は「優先順位の小さい順」に並んでいる。同じ番号の着信ルートが
+    # 複数あるときは、画面の説明 (小さいほど先に判定) どおり先頭のものを使う。
+    # (以前は後のもので上書きしていたため、数字の大きい方が使われていた)
     for ib in inbounds:
         if ib.did_number and ib.did_number.strip():
-            inbound_by_did[ib.did_number.strip()] = ib
-        else:
+            inbound_by_did.setdefault(ib.did_number.strip(), ib)
+        elif catch_all is None:
             catch_all = ib
 
     for did in all_dids:
@@ -2311,9 +2464,14 @@ def _hikari_did_dispatcher(
         if ib is not None:
             out.write(_inbound_route_to_dialplan_with_exten(ib, did, system_language, vm_only, no_answer_exts))
         else:
+            cl = "".join(
+                f" same => n,{a}\n"
+                for a in _calllog_dest_actions("hangup", "", "着信ルート未設定")
+            )
             out.write(
                 f";=== DID {did}: 着信ルート未設定 → デフォルト動作 ===\n"
                 f"exten => {did},1,NoOp(Hikari DID {did} no route)\n"
+                f"{cl}"
                 f" same => n,Playback(vm-nobodyavail)\n"
                 f" same => n,Hangup()\n"
             )
@@ -2324,6 +2482,8 @@ def _hikari_did_dispatcher(
         out.write(_inbound_route_to_dialplan_with_exten(catch_all, "_X.", system_language, vm_only, no_answer_exts))
     else:
         out.write("exten => _X.,1,NoOp(Hikari DID ${EXTEN} unmatched)\n")
+        for _a in _calllog_dest_actions("hangup", "", "着信ルート未設定"):
+            out.write(f" same => n,{_a}\n")
         out.write(" same => n,Hangup()\n")
 
     return out.getvalue()
@@ -2373,6 +2533,8 @@ def _inbound_route_to_dialplan_with_exten(
     elif dest == "queue":
         actions.append(f"Goto(queue-{_ident(val)},s,1)")
     elif dest == "voicemail":
+        # 留守番電話の案内を流す前に、FAX かどうかを見極める
+        actions.extend(_cng_wait_actions())
         if val in vm_only:
             # 留守番電話専用内線なら応答メッセージの再生から通す
             actions.append(f"Goto(from-internal,{val},1)")
@@ -2463,7 +2625,12 @@ def _dest_goto_line(
         # これが無いと、電話機が起動していない内線へ転送したときに
         # 次の行が Hangup になり、そのまま切断されてしまう。
         na = "".join(f" same => n,{a}\n" for a in (no_answer_map or {}).get(dest_value, []))
-        return f" same => n,{_dial_or_voicemail_only(dest_value, 30, vm_only)}\n{na}"
+        # 履歴の着信先を、時間条件から実際の内線へ更新する
+        cl = "".join(
+            f" same => n,{a}\n"
+            for a in _calllog_dest_actions("extension", dest_value, f"内線 {dest_value}")
+        )
+        return f"{cl} same => n,{_dial_or_voicemail_only(dest_value, 30, vm_only)}\n{na}"
     if dest_type == "ring_group":
         return f" same => n,Goto(ring-group-{_ident(dest_value)},s,1)\n"
     if dest_type == "queue":
@@ -2475,14 +2642,18 @@ def _dest_goto_line(
         # 呼ばずに [from-internal] の専用 exten へ回す。そうしないと
         # 設定した応答メッセージが再生されず、Asterisk 標準の案内
         # (「トーンの後にメッセージを…」) がいきなり流れてしまう。
+        # 留守番電話の案内を流す前に、FAX かどうかを見極める
+        cng = _cng_wait_lines()
         if dest_value in vm_only:
-            return f" same => n,Goto(from-internal,{dest_value},1)\n"
+            return f"{cng} same => n,Goto(from-internal,{dest_value},1)\n"
         return (
+            f"{cng}"
             f"{_voicemail_hook_setup_lines(dest_value)}"
             f" same => n,VoiceMail({dest_value}@default)\n"
         )
     # "hangup" および未知の値は安全側 (切断) に倒す。
-    return " same => n,Hangup()\n"
+    cl = "".join(f" same => n,{a}\n" for a in _calllog_dest_actions("hangup", "", "切断"))
+    return f"{cl} same => n,Hangup()\n"
 
 
 def _render_queue_context(q: Queue, vm_only: set[str] | None = None,
@@ -2500,6 +2671,8 @@ def _render_queue_context(q: Queue, vm_only: set[str] | None = None,
     for _a in _calllog_dest_actions("queue", q.queue_number, f"キュー {q.name}"):
         out.write(f" same => n,{_a}\n")
     out.write(" same => n,Answer()\n")
+    # 保留音や案内を流す前に、FAX かどうかを見極める (_cng_wait_actions)
+    out.write(_cng_wait_lines(answer=False))
     out.write(f" same => n,Queue({q.queue_number})\n")
     if q.fallback_type and q.fallback_value:
         out.write(_fallback_line(q.fallback_type, q.fallback_value, vm_only, no_answer_map))
