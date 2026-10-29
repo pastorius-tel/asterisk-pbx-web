@@ -3438,6 +3438,14 @@ async def write_all_configs(
     out_dir = out_dir or settings.asterisk_config_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # FAX のスプール。Asterisk は受信した FAX をここへ書くが、フォルダを
+    # 自分では作らないため、無いと FAX を受信できない (送信を一度もして
+    # いない新しい環境で起きる)。作れない場合は「ファイル権限の診断」に出る。
+    try:
+        settings.fax_spool_dir.mkdir(exist_ok=True)
+    except OSError as e:
+        log.warning("FAX のスプール %s を作成できません: %s", settings.fax_spool_dir, e)
+
     files: dict[str, str] = {}
 
     #-- DB 由来 (常に上書きする)--

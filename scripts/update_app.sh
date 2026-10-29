@@ -213,6 +213,8 @@ TS="$(date +%Y%m%d_%H%M%S)"
 for f in .env pbx.db; do
     if [ -f "$INSTALL_DIR/$f" ]; then
         cp -a "$INSTALL_DIR/$f" "$INSTALL_DIR/$f.bak-$TS"
+        # 合言葉やパスワードが入るので、持ち主だけが読めるようにする
+        chmod 600 "$INSTALL_DIR/$f.bak-$TS"
         ok "$f → $f.bak-$TS"
     fi
 done
@@ -283,6 +285,21 @@ fi
 log "6/6  起動"
 # -----------------------------------------------------------------------------
 chown -R "$RUN_USER":"$RUN_USER" "$INSTALL_DIR"
+
+# 本ツールが使うフォルダ (受信 FAX の保存先・FAX のスプール・音源など) の
+# 有無と権限を、更新のたびに確かめて直す。/var/lib などの下は本ツール自身
+# では作れないため、インストール時に用意されていないと、その機能だけが
+# 動かなくなる。
+PERM_SCRIPT="$INSTALL_DIR/scripts/check_permissions.sh"
+if [ -f "$PERM_SCRIPT" ]; then
+    if APP_USER="$RUN_USER" INSTALL_DIR="$INSTALL_DIR" APPLY=1 QUIET=1 bash "$PERM_SCRIPT"; then
+        ok "本ツールが使うフォルダの権限 (${RUN_USER})"
+    else
+        warn "権限を直せなかった場所があります (上の NG を確認してください)。"
+        warn "  確認: sudo bash ${INSTALL_DIR}/scripts/check_permissions.sh"
+    fi
+fi
+
 systemctl start asterisk-pbx-web
 sleep 3
 if systemctl is-active --quiet asterisk-pbx-web; then

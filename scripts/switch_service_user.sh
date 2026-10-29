@@ -136,57 +136,18 @@ echo "  インストール先   : ${INSTALL_DIR}"
 BLOCKERS=()
 CHANGES=()
 
-# --- .env から場所の設定を読む (値は表示しない。シェルとして実行もしない) ---
-ENV_FILE="$INSTALL_DIR/.env"
-env_get() {
-    local key="$1" line
-    [ -f "$ENV_FILE" ] || return 0
-    line="$(grep -iE "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" "$ENV_FILE" | tail -1 || true)"
-    [ -n "$line" ] || return 0
-    line="${line#*=}"
-    line="$(printf '%s' "$line" | sed -E 's/\r$//; s/^[[:space:]]+//')"
-    case "$line" in
-        \"*) line="${line#\"}"; line="${line%%\"*}" ;;
-        \'*) line="${line#\'}"; line="${line%%\'*}" ;;
-        *)   line="$(printf '%s' "$line" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')" ;;
-    esac
-    printf '%s' "$line"
-}
-# 相対パスは WorkingDirectory (= インストール先) から見た場所
-abs_path() {
-    case "$1" in
-        /*) printf '%s' "$1" ;;
-        *)  local p="${1#./}"; printf '%s' "$INSTALL_DIR/$p" ;;
-    esac
-}
-inside_install() { case "$1/" in "$INSTALL_DIR"/*) return 0 ;; esac; return 1; }
-
-CONF_DIR="$(abs_path "$(env_get ASTERISK_CONFIG_DIR)")";   [ "$CONF_DIR" != "$INSTALL_DIR/" ] || CONF_DIR=""
-VM_DIR="$(abs_path "$(env_get VOICEMAIL_SPOOL_DIR)")";     [ "$VM_DIR" != "$INSTALL_DIR/" ] || VM_DIR=""
-FAX_SPOOL="$(abs_path "$(env_get FAX_SPOOL_DIR)")";        [ "$FAX_SPOOL" != "$INSTALL_DIR/" ] || FAX_SPOOL=""
-FAX_STORE="$(abs_path "$(env_get FAX_STORE_DIR)")";        [ "$FAX_STORE" != "$INSTALL_DIR/" ] || FAX_STORE=""
-HTS_DIR="$(abs_path "$(env_get HTS_VOICE_DIR)")";          [ "$HTS_DIR" != "$INSTALL_DIR/" ] || HTS_DIR=""
-SND_DIR="$(abs_path "$(env_get ASTERISK_SOUNDS_DIR)")";    [ "$SND_DIR" != "$INSTALL_DIR/" ] || SND_DIR=""
-UPL_DIR="$(abs_path "$(env_get UPLOADS_DIR)")";            [ "$UPL_DIR" != "$INSTALL_DIR/" ] || UPL_DIR=""
-BAK_DIR="$(abs_path "$(env_get BACKUP_DIR)")";             [ "$BAK_DIR" != "$INSTALL_DIR/" ] || BAK_DIR=""
-CONF_DIR="${CONF_DIR:-/etc/asterisk}"
-VM_DIR="${VM_DIR:-/var/spool/asterisk/voicemail}"
-FAX_SPOOL="${FAX_SPOOL:-/var/spool/asterisk/fax}"
-FAX_STORE="${FAX_STORE:-/var/lib/asterisk-pbx-web/fax}"
-HTS_DIR="${HTS_DIR:-/var/lib/asterisk-pbx-web/hts-voice}"
-SND_DIR="${SND_DIR:-/var/lib/asterisk/sounds/ja/managed}"
-JA_DIR="/var/lib/asterisk/sounds/ja"          # 日本語音声・日時読み上げ (固定)
-SOUNDS_ROOT="/var/lib/asterisk/sounds"        # 日本語音声パックの展開先 (固定)
-
-DB_URL="$(env_get DATABASE_URL)"
-DB_FILE=""
-case "${DB_URL:-sqlite+aiosqlite:///./pbx.db}" in
-    sqlite*)
-        DB_FILE="${DB_URL:-sqlite+aiosqlite:///./pbx.db}"
-        DB_FILE="${DB_FILE#*:///}"; DB_FILE="${DB_FILE%%\?*}"
-        DB_FILE="$(abs_path "$DB_FILE")"
-        ;;
-esac
+# --- 場所の確認・修正は check_permissions.sh と共通 (.env で変えた場所も見る) ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$SCRIPT_DIR/check_permissions.sh" ] || err "${SCRIPT_DIR}/check_permissions.sh がありません。"
+# shellcheck source=check_permissions.sh
+. "$SCRIPT_DIR/check_permissions.sh"
+# shellcheck disable=SC2034  # check_permissions.sh の関数が使う
+PERM_USER="$NEW_USER"
+# shellcheck disable=SC2034
+PERM_INSTALL_DIR="$INSTALL_DIR"
+perm_init
+ENV_FILE="$PERM_ENV_FILE"
+DB_FILE="$PERM_DB_FILE"
 
 # --- 待ち受けアドレス (画面の応答確認と、1024 未満のポートの判定に使う) ---
 EXEC_START="$(unit_prop ExecStart)"
@@ -202,7 +163,7 @@ elif [ -n "$BIND" ]; then
 else
     WEB_PORT="$(printf '%s' "$EXEC_START" | grep -oE -- '--port[= ]+[0-9]+' | head -1 | grep -oE '[0-9]+$' || true)"
 fi
-case "$WEB_PORT" in ''|*[!0-9]*) WEB_PORT="$(env_get PORT)" ;; esac
+case "$WEB_PORT" in ''|*[!0-9]*) WEB_PORT="$(perm_env_get PORT)" ;; esac
 case "$WEB_PORT" in ''|*[!0-9]*) WEB_PORT="8080" ;; esac
 NEED_BIND_CAP=0
 if [ "$HTTP_CHECK" = "1" ]; then
@@ -266,7 +227,7 @@ if [ ! -x "$PY" ]; then
     BLOCKERS+=("${PY} がありません。")
 else
     REAL_PY="$(readlink -f "$PY")"
-    if ! inside_install "$REAL_PY" && ! as_user test -x "$REAL_PY" 2>/dev/null; then
+    if ! perm_inside_install "$REAL_PY" && ! as_user test -x "$REAL_PY" 2>/dev/null; then
         BLOCKERS+=("仮想環境の元になっている Python (${REAL_PY}) を ${NEW_USER} が実行できません。仮想環境を、誰でも使える場所の Python (例: /usr/bin/python3) で作り直す必要があります。")
     elif [ "${#TRAVERSE_DIRS[@]}" -eq 0 ] && py_import >/dev/null; then
         PY_OK=1
@@ -277,119 +238,16 @@ else
 fi
 if [ -n "$EXEC_BIN" ]; then
     REAL_BIN="$(readlink -f "$EXEC_BIN" 2>/dev/null || echo "$EXEC_BIN")"
-    if ! inside_install "$REAL_BIN" && ! as_user test -x "$REAL_BIN" 2>/dev/null; then
+    if ! perm_inside_install "$REAL_BIN" && ! as_user test -x "$REAL_BIN" 2>/dev/null; then
         BLOCKERS+=("起動コマンド ${EXEC_BIN} を ${NEW_USER} が実行できません。")
     fi
 fi
 
-# --- 書き込みが必要な場所 ---
-#   app   : インストール先。持ち主ごと NEW_USER に
-#   own   : 本ツールだけが使う場所。無ければ作り、持ち主ごと NEW_USER に
-#   ownx  : 同上だが、無ければ作らない
-#   share : Asterisk と共有する場所。持ち主は変えず、グループを NEW_USER にして書き込み可に
-#   dir   : そのフォルダ自体だけ (中は変えない) グループを NEW_USER にして書き込み可に
-#   dbfile: インストール先の外にあるデータベースファイル (と -wal / -shm)
-TARGETS=()
-add_target() { TARGETS+=("$1|$2|$3"); }   # 種類|場所|説明
-add_target app   "$INSTALL_DIR" "インストール先 (.env・データベース・アップロード・バックアップ)"
-add_target share "$CONF_DIR"    "Asterisk の設定ファイル"
-add_target share "$VM_DIR"      "留守番電話のメッセージ"
-add_target share "$FAX_SPOOL"   "FAX の送受信スプール"
-inside_install "$FAX_STORE" || add_target own "$FAX_STORE" "受信 FAX の保存先"
-inside_install "$HTS_DIR"   || add_target own "$HTS_DIR"   "音声合成の声データ"
-add_target ownx  "$JA_DIR"      "日本語音声・日時読み上げ"
-if ! inside_install "$SND_DIR"; then
-    case "$SND_DIR/" in "$JA_DIR"/*) ;; *) add_target own "$SND_DIR" "アップロードした音源" ;; esac
-fi
-add_target dir   "$SOUNDS_ROOT" "日本語音声パックの展開先"
-if [ -n "$UPL_DIR" ] && ! inside_install "$UPL_DIR"; then add_target own "$UPL_DIR" "アップロード"; fi
-if [ -n "$BAK_DIR" ] && ! inside_install "$BAK_DIR"; then add_target own "$BAK_DIR" "バックアップ"; fi
-if [ -n "$DB_FILE" ] && ! inside_install "$DB_FILE"; then
-    add_target dbfile "$DB_FILE" "データベース"
-fi
-
-# 自動で権限を変えてよい場所か。Asterisk と本ツールの標準の場所だけを対象にし、
-# .env で別の場所 (例: Samba で共有しているフォルダ) を指定している場合は、
-# 持ち主やグループを勝手に変えず、手で権限を付けてもらう。
-auto_ok() {
-    local p
-    p="$(readlink -f "$1" 2>/dev/null || printf '%s' "$1")"
-    case "$p/" in
-        /etc/asterisk/*|/var/spool/asterisk/*|/var/lib/asterisk/*|/var/lib/asterisk-pbx-web/*) return 0 ;;
-    esac
-    return 1
-}
-
-owned_tree()    { [ -z "$(find "$1" ! -user "$NEW_USER" -print -quit 2>/dev/null)" ]; }
-writable_tree() {
-    as_user test -w "$1" 2>/dev/null || return 1
-    [ -z "$(as_user find "$1" ! -writable -print -quit 2>/dev/null)" ]
-}
-
-# 場所が NEW_USER から使えるか。0=問題なし 1=要修正 2=まだ無い
-needs_fix() {
-    local kind="$1" path="$2" real f
-    [ -e "$path" ] || return 2
-    real="$(readlink -f "$path")"
-    case "$kind" in
-        dir)
-            as_user test -w "$real" 2>/dev/null && return 0 || return 1 ;;
-        app)
-            owned_tree "$real" ;;
-        own|ownx)
-            # 標準以外の場所は持ち主を変えないので、書き込めるかどうかで判定する
-            if auto_ok "$real"; then owned_tree "$real"; else writable_tree "$real"; fi ;;
-        share)
-            writable_tree "$real" ;;
-        dbfile)
-            for f in "$real" "$real-wal" "$real-shm"; do
-                [ -e "$f" ] || continue
-                [ "$(stat -c %U "$f")" = "$NEW_USER" ] || return 1
-            done
-            return 0 ;;
-    esac
-}
-
-for t in "${TARGETS[@]}"; do
-    IFS='|' read -r kind path desc <<< "$t"
-    rc=0; needs_fix "$kind" "$path" || rc=$?
-    if [ "$rc" = "0" ]; then
-        ok "${path}  (${desc})"
-        continue
-    fi
-    if [ "$rc" = "2" ]; then
-        if [ "$kind" = "own" ] || { [ "$kind" = "share" ] && [ "$path" = "$FAX_SPOOL" ]; }; then
-            if auto_ok "$path"; then
-                todo "${path}  まだ無いので ${NEW_USER} の持ち物として作ります  (${desc})"; CHANGES+=("$t")
-            else
-                warn "${path} (${desc}) がまだありません。${NEW_USER} が書き込める状態で用意してください。"
-            fi
-        elif [ "$kind" = "share" ]; then
-            info "${path}  まだありません (Asterisk が作ります)"
-        else
-            info "${path}  まだありません"
-        fi
-        continue
-    fi
-    # rc=1 (要修正)
-    case "$kind" in
-        own|ownx|share)
-            if ! auto_ok "$path"; then
-                BLOCKERS+=("${path} (${desc}) に ${NEW_USER} が書き込めません。標準以外の場所のため、持ち主やグループは自動では変えません。次のように ${NEW_USER} だけに書き込みを許可してから、もう一度実行してください:  sudo setfacl -R -m u:${NEW_USER}:rwX -m d:u:${NEW_USER}:rwX ${path}")
-                continue
-            fi ;;
-    esac
-    if [ "$kind" = "dbfile" ] && ! as_user test -w "$(dirname "$(readlink -f "$path")")" 2>/dev/null; then
-        BLOCKERS+=("データベース (${path}) のフォルダに ${NEW_USER} が書き込めません。SQLite は同じフォルダに作業用ファイルを作るため、そのフォルダに ${NEW_USER} が書き込めるよう手動で権限を付けてください。")
-        continue
-    fi
-    case "$kind" in
-        app|own|ownx|dbfile) todo "${path}  持ち主を ${NEW_USER} にします  (${desc})" ;;
-        share) todo "${path}  グループを ${NEW_USER} にして書き込み可にします  (${desc})" ;;
-        dir)   todo "${path}  このフォルダだけグループを ${NEW_USER} にして書き込み可にします  (${desc})" ;;
-    esac
-    CHANGES+=("$t")
-done
+# --- 書き込みが必要な場所 (check_permissions.sh と共通) ---
+perm_classify
+CHANGES=("${PERM_CHANGES[@]}")
+BLOCKERS+=("${PERM_BLOCKERS[@]}")
+[ "$PERM_ADD_GROUP" = "1" ] && CHANGES+=("group")
 
 if [ "$CUR_USER" = "$NEW_USER" ]; then
     ok "サービスはすでに ${NEW_USER} で動いています"
@@ -467,39 +325,8 @@ if [ "$PY_OK" != "1" ]; then
     ok "仮想環境の Python を ${NEW_USER} で実行できます"
 fi
 
-for t in "${CHANGES[@]}"; do
-    IFS='|' read -r kind path desc <<< "$t"
-    case "$kind" in
-        app) ;;   # 上で済ませた
-        own|ownx)
-            [ "$kind" = "own" ] && mkdir -p "$path"
-            chown -R "$NEW_USER:$NEW_USER" "$(readlink -f "$path")"
-            ok "${path}: 持ち主を ${NEW_USER} にしました"
-            ;;
-        share)
-            if [ ! -e "$path" ]; then
-                mkdir -p "$path"; chown "$NEW_USER:$NEW_USER" "$path"; chmod 775 "$path"
-                ok "${path}: 作成しました"
-            else
-                real="$(readlink -f "$path")"
-                chgrp -R "$NEW_USER" "$real"
-                chmod -R g+rwX "$real"
-                ok "${path}: グループを ${NEW_USER} にし、書き込み可にしました"
-            fi
-            ;;
-        dir)
-            chgrp "$NEW_USER" "$path"; chmod g+rwx "$path"
-            ok "${path}: グループを ${NEW_USER} にし、書き込み可にしました"
-            ;;
-        dbfile)
-            real="$(readlink -f "$path")"
-            for f in "$real" "$real-wal" "$real-shm"; do
-                [ -e "$f" ] && chown "$NEW_USER:$NEW_USER" "$f"
-            done
-            ok "${path}: 持ち主を ${NEW_USER} にしました"
-            ;;
-    esac
-done
+# ほかの場所 (インストール先は上で済ませた)
+PERM_SKIP_APP=1 perm_apply
 
 if [ "$CUR_USER" != "$NEW_USER" ]; then
     mkdir -p "$DROPIN_DIR"
@@ -558,13 +385,7 @@ MAIN_PID="$(unit_prop MainPID)"
 RUN_AS="$(ps -o user= -p "${MAIN_PID:-0}" 2>/dev/null | tr -d ' ' || true)"
 ok "${UNIT_NAME} が起動し、画面が応答しています (実行ユーザー: ${RUN_AS:-$NEW_USER})"
 
-FAILED=0
-for t in "${TARGETS[@]}"; do
-    IFS='|' read -r kind path desc <<< "$t"
-    rc=0; needs_fix "$kind" "$path" || rc=$?
-    if [ "$rc" = "1" ]; then ng "${path} をまだ ${NEW_USER} が使えません"; FAILED=1; fi
-done
-[ "$FAILED" = "0" ] && ok "本ツールが使う場所すべてを ${NEW_USER} が使えます"
+if perm_verify; then ok "本ツールが使う場所すべてを ${NEW_USER} が使えます"; fi
 
 cat <<EOF
 

@@ -368,7 +368,9 @@ if [ -z "$APP_USER" ]; then
   APP_USER="$(systemctl show -p User --value asterisk-pbx-web 2>/dev/null || true)"
 fi
 if [ -z "$APP_USER" ] || [ "$APP_USER" = "root" ]; then
-  APP_USER="${SUDO_USER:-}"
+  # 本ツールは asterisk ユーザーで動かす前提。サービスが root で動いている
+  # 古い環境でも、asterisk で動かしたときに必要な権限を用意する
+  if id -u asterisk >/dev/null 2>&1; then APP_USER="asterisk"; else APP_USER="${SUDO_USER:-}"; fi
 fi
 
 if [ -z "$APP_USER" ]; then
@@ -380,145 +382,23 @@ else
   log "本ツールの実行ユーザーとして '${APP_USER}' を使用します"
   log "(誤っている場合は APP_USER=<正しいユーザー名> を指定して再実行してください)"
 
-  NEED_FIX=0
-
-  # asterisk グループへの所属確認
-  if getent group asterisk >/dev/null 2>&1; then
-    if id -nG "$APP_USER" 2>/dev/null | grep -qw asterisk; then
-      skip "${APP_USER} は既に asterisk グループに所属"
+  # 確認と修正は check_permissions.sh と共通。足りないフォルダ (受信 FAX の
+  # 保存先・FAX のスプールなど) の作成も含む。以前はここに個別に書いていて、
+  # 「初回受信で作成される」としていた保存先が実際には作れず、FAX の PDF
+  # 変換が失敗していた。
+  SD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -f "$SD_SCRIPT_DIR/check_permissions.sh" ]; then
+    if APP_USER="$APP_USER" APPLY="${FIX_PERMISSIONS:-0}" bash "$SD_SCRIPT_DIR/check_permissions.sh"; then
+      :
+    elif [ "${FIX_PERMISSIONS:-0}" != "1" ]; then
+      warn ""
+      warn "上記の未設定項目をまとめて自動修正したい場合は、次のように再実行してください:"
+      warn "  sudo FIX_PERMISSIONS=1 bash setup_dependencies.sh"
     else
-      NEED_FIX=1
-      if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
-        usermod -aG asterisk "$APP_USER"
-        ok "${APP_USER} を asterisk グループに追加しました (反映にはサービス再起動が必要です)"
-      else
-        warn "${APP_USER} が asterisk グループに未所属です。実行してください:"
-        warn "  sudo usermod -aG asterisk ${APP_USER}"
-      fi
+      warn "自動で直せなかった項目があります (上の NG を確認してください)"
     fi
   else
-    warn "asterisk グループが見つかりません (Asterisk のインストール方法によっては存在しないことがあります)"
-  fi
-
-  # /etc/asterisk のグループ書き込み権限
-  # (このスクリプト自体は root で動くため単純な [-w] では判定できない。
-  #  実際に APP_USER としてテストする)
-  if [ -d /etc/asterisk ]; then
-    if sudo -u "$APP_USER" test -w /etc/asterisk 2>/dev/null; then
-      skip "/etc/asterisk は ${APP_USER} から書き込み可能です"
-    else
-      NEED_FIX=1
-      if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
-        # chmod g+w だけでは、ディレクトリの所有グループが asterisk
-        # 以外 (よくあるのは root) のままだと意味が無い (APP_USER を
-        # asterisk グループに入れても、所有グループが違えば "その他"
-        # 扱いになり書き込めない)。所有グループも asterisk に揃える。
-        chgrp -R asterisk /etc/asterisk 2>/dev/null || true
-        chmod -R g+w /etc/asterisk
-        ok "/etc/asterisk の所有グループを asterisk にし、書き込み権限を付与しました"
-      else
-        warn "/etc/asterisk が ${APP_USER} から書き込みできません。実行してください:"
-        warn "  sudo chgrp -R asterisk /etc/asterisk"
-        warn "  sudo chmod -R g+w /etc/asterisk"
-      fi
-    fi
-  fi
-
-  # 音源 (MP3) アップロード先
-  SOUNDS_DIR="/var/lib/asterisk/sounds/ja/managed"
-  if [ ! -d "$SOUNDS_DIR" ]; then
-    NEED_FIX=1
-    if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
-      mkdir -p "${SOUNDS_DIR}"/{moh,park,ivr,voicemail,custom}
-      chown -R asterisk:asterisk "$SOUNDS_DIR" 2>/dev/null || true
-      chmod -R g+w "$SOUNDS_DIR"
-      ok "${SOUNDS_DIR} を作成し権限を設定しました"
-    else
-      warn "${SOUNDS_DIR} がまだありません (音源アップロード時に自動作成されますが、"
-      warn "先に作っておきたい場合は次を実行してください):"
-      warn "  sudo mkdir -p ${SOUNDS_DIR}/{moh,park,ivr,voicemail,custom}"
-      warn "  sudo chown -R asterisk:asterisk ${SOUNDS_DIR}"
-      warn "  sudo chmod -R g+w ${SOUNDS_DIR}"
-    fi
-  else
-    skip "${SOUNDS_DIR} は存在します"
-  fi
-
-  # FAX 受信スプール (Asterisk 側)
-  FAX_SPOOL="/var/spool/asterisk/fax"
-  if [ -d "$FAX_SPOOL" ]; then
-    if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
-      chown -R asterisk:asterisk "$FAX_SPOOL" 2>/dev/null || true
-      chmod -R g+rw "$FAX_SPOOL"
-      ok "${FAX_SPOOL} の権限を設定しました"
-    else
-      skip "${FAX_SPOOL} は存在します (権限確認は FIX_PERMISSIONS=1 で実施)"
-    fi
-  else
-    log "${FAX_SPOOL} はまだありません (FAX 機能を有効化して初回反映すると作成されます)"
-  fi
-
-  # FAX 保存先 (Asterisk とは無関係、本ツールが変換後の PDF を保存する
-  # 場所。asterisk グループは不要で、単純に APP_USER の所有物にする)
-  FAX_STORE="/var/lib/asterisk-pbx-web/fax"
-  if [ -d "$FAX_STORE" ]; then
-    if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
-      chown -R "${APP_USER}:${APP_USER}" "$FAX_STORE" 2>/dev/null || true
-      ok "${FAX_STORE} の所有者を ${APP_USER} にしました"
-    else
-      skip "${FAX_STORE} は存在します (権限確認は FIX_PERMISSIONS=1 で実施)"
-    fi
-  else
-    log "${FAX_STORE} はまだありません (FAX 機能を有効化して初回受信すると作成されます)"
-  fi
-
-  # 日時読み上げ用の音声 (digits/)
-  # 留守番電話の「録音日時の読み上げ」で使う。日本語音声パックには
-  # 含まれていないので本ツールが TTS で合成して書き込む。
-  DIGITS_DIR="/var/lib/asterisk/sounds/ja/digits"
-  if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
-    mkdir -p "$DIGITS_DIR"
-    chown -R asterisk:asterisk "$DIGITS_DIR" 2>/dev/null || true
-    chmod -R g+w "$DIGITS_DIR"
-    ok "${DIGITS_DIR} の権限を設定しました"
-  elif [ -d "$DIGITS_DIR" ]; then
-    skip "${DIGITS_DIR} は存在します (権限確認は FIX_PERMISSIONS=1 で実施)"
-  else
-    log "${DIGITS_DIR} はまだありません (日時読み上げ音声の生成時に作成されます)"
-  fi
-
-  # TTS 音響モデル (.htsvoice) の保存先
-  # apt で入る標準の声は /usr/share/hts-voice (root 所有) にあり書き込め
-  # ないため、画面から追加する声はこちらへ保存する。
-  HTS_DIR="/var/lib/asterisk-pbx-web/hts-voice"
-  if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
-    mkdir -p "$HTS_DIR"
-    chown -R "${APP_USER}:${APP_USER}" "$HTS_DIR" 2>/dev/null || true
-    ok "${HTS_DIR} を作成し所有者を ${APP_USER} にしました"
-  elif [ -d "$HTS_DIR" ]; then
-    skip "${HTS_DIR} は存在します (権限確認は FIX_PERMISSIONS=1 で実施)"
-  else
-    log "${HTS_DIR} はまだありません (声パックの追加時に作成されます)"
-  fi
-
-  # 留守番電話スプール (一覧・再生・削除に読み書き権限が必要)
-  VM_SPOOL="/var/spool/asterisk/voicemail"
-  if [ -d "$VM_SPOOL" ]; then
-    if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
-      chgrp -R asterisk "$VM_SPOOL" 2>/dev/null || true
-      chmod -R g+rw "$VM_SPOOL" 2>/dev/null || true
-      ok "${VM_SPOOL} の所有グループを asterisk にし、読み書き権限を付与しました"
-    else
-      skip "${VM_SPOOL} は存在します (権限確認は FIX_PERMISSIONS=1 で実施)"
-    fi
-  else
-    log "${VM_SPOOL} はまだありません (留守番電話が有効な内線に、最初のメッセージが届くと作成されます)"
-  fi
-
-  if [ "$NEED_FIX" = "1" ] && [ "${FIX_PERMISSIONS:-0}" != "1" ]; then
-    warn ""
-    warn "上記の未設定項目をまとめて自動修正したい場合は、次のように再実行してください:"
-    warn "  sudo FIX_PERMISSIONS=1 bash setup_dependencies.sh"
+    warn "${SD_SCRIPT_DIR}/check_permissions.sh が見つかりません"
   fi
 fi
 

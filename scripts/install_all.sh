@@ -532,9 +532,20 @@ log "8/10  OS 側の依存パッケージ (FAX・音源・音声合成)"
 # =============================================================================
 if [ -f "$INSTALL_DIR/scripts/setup_dependencies.sh" ]; then
     # Postfix は対話が必要なのでここではスキップ (後で個別に実行する案内を出す)
+    # 途中の項目 (apt の取得など) が失敗すると、このスクリプトは残りの項目を
+    # 行わずに止まる。以前はその失敗を表示せず「OK」としていたため、後半の
+    # 権限設定が行われないまま (受信 FAX の保存先が無いまま) になることがあった。
+    # 失敗は表示し、権限の設定は 9/10 で別に必ず行う。
+    SD_RC=0
     SKIP_POSTFIX=1 SKIP_TIMEZONE=1 FIX_PERMISSIONS=1 APP_USER="$RUN_USER" \
-        bash "$INSTALL_DIR/scripts/setup_dependencies.sh" 2>&1 | grep -E "OK|WARN|skip|===" || true
-    ok "依存パッケージと権限設定"
+        bash "$INSTALL_DIR/scripts/setup_dependencies.sh" > /tmp/setup_dependencies.log 2>&1 || SD_RC=$?
+    grep -E "OK|WARN|skip|===" /tmp/setup_dependencies.log || true
+    if [ "$SD_RC" = "0" ]; then
+        ok "依存パッケージと権限設定"
+    else
+        warn "依存パッケージの設定が途中で止まりました (詳細: /tmp/setup_dependencies.log)。"
+        warn "  原因を取り除いてから sudo bash ${INSTALL_DIR}/scripts/setup_dependencies.sh を実行してください。"
+    fi
 else
     warn "setup_dependencies.sh が見つかりません"
 fi
@@ -554,6 +565,16 @@ fi
 log "9/10  サービス登録 (systemd)"
 # =============================================================================
 chown -R "$RUN_USER":"$RUN_USER" "$INSTALL_DIR"
+
+# 本ツールが使うフォルダ (受信 FAX の保存先・FAX のスプール・音源など) を
+# 用意する。8/10 が途中で止まっていても、ここで必ず行う。
+if [ -f "$INSTALL_DIR/scripts/check_permissions.sh" ]; then
+    if APP_USER="$RUN_USER" APPLY=1 QUIET=1 bash "$INSTALL_DIR/scripts/check_permissions.sh"; then
+        ok "本ツールが使うフォルダの権限 (${RUN_USER})"
+    else
+        warn "権限を直せなかった場所があります。sudo bash ${INSTALL_DIR}/scripts/check_permissions.sh で確認してください。"
+    fi
+fi
 
 cat > /etc/systemd/system/asterisk-pbx-web.service <<EOF
 [Unit]

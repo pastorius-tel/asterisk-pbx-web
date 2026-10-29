@@ -404,11 +404,19 @@ python -m app.auth hash
 ディレクトリの一覧と、書き込めるかどうか、書けない場合の修正コマンドが
 その場に表示されます。問題があるときは画面の先頭にも警告が出ます。
 
-まとめて直す場合:
+コマンドで確認・修正することもできます。本ツールが使う場所をすべて調べ、
+足りないフォルダの作成と権限の修正をまとめて行います (更新スクリプト
+`update_app.sh` も、更新のたびに同じ確認と修正を行います)。
 
 ```bash
-sudo FIX_PERMISSIONS=1 bash scripts/setup_dependencies.sh
+sudo bash scripts/check_permissions.sh            # 確認だけ (何も変更しない)
+sudo APPLY=1 bash scripts/check_permissions.sh    # 直す
 ```
+
+本ツールは root では動かないため、`/var/lib` などの下に自分でフォルダを
+作れません。インストール時にフォルダが用意されていないと、その機能だけが
+動かなくなります (例: 受信 FAX の保存先が無く、PDF 変換が失敗する)。
+`/var/lib` そのものなど、システムのフォルダの持ち主は変えないでください。
 
 手で設定する場合:
 
@@ -431,19 +439,20 @@ sudo chmod -R g+w /var/spool/asterisk /var/lib/asterisk-pbx-web
 
 本ツールが使うディレクトリは次のとおりです。
 
-| 用途 | 既定のパス | 必要な権限 |
-|---|---|---|
-| Asterisk 設定ファイル | `/etc/asterisk` | 書き込み |
-| 音源の変換先 | `/var/lib/asterisk/sounds/ja/managed` | 書き込み |
-| 日本語音声プロンプト | `/var/lib/asterisk/sounds` | 書き込み |
-| 日時読み上げ音声 | `/var/lib/asterisk/sounds/ja/digits` | 書き込み |
-| TTS 音響モデル | `/var/lib/asterisk-pbx-web/hts-voice` | 書き込み |
-| アップロード一時置き場 | `./uploads` | 書き込み |
-| FAX スプール | `/var/spool/asterisk/fax` | 書き込み |
-| FAX 保存先 | `/var/lib/asterisk-pbx-web/fax` | 書き込み |
-| 留守番電話スプール | `/var/spool/asterisk/voicemail` | 読み書き |
-| バックアップ | `./backups` | 書き込み |
-| データベース | `./pbx.db` | 書き込み |
+| 用途 | 既定のパス | 必要な権限 | 用意するもの |
+|---|---|---|---|
+| Asterisk 設定ファイル | `/etc/asterisk` | 中のファイルまで書き込み | Asterisk のインストール |
+| 音源の変換先 | `/var/lib/asterisk/sounds/ja/managed` | 書き込み | インストール時 |
+| 日本語音声プロンプト | `/var/lib/asterisk/sounds/ja` | 書き込み | 日本語音声の導入時 |
+| 日本語音声の展開先 | `/var/lib/asterisk/sounds` | 書き込み | Asterisk のインストール |
+| 日時読み上げ音声 | `/var/lib/asterisk/sounds/ja/digits` | 書き込み | 本ツール (上のフォルダの中に作る) |
+| TTS 音響モデル | `/var/lib/asterisk-pbx-web/hts-voice` | 書き込み | インストール時 |
+| アップロード一時置き場 | `./uploads` | 書き込み | 本ツール |
+| FAX スプール | `/var/spool/asterisk/fax` | 書き込み | インストール時・「変更を Asterisk へ反映」(無いと FAX を受信できない) |
+| FAX 保存先 (受信・送信の PDF) | `/var/lib/asterisk-pbx-web/fax` | 書き込み | インストール時 |
+| 留守番電話スプール | `/var/spool/asterisk/voicemail` | 中のファイルまで読み書き | Asterisk |
+| バックアップ | `./backups` | 書き込み | 本ツール |
+| データベース | `./pbx.db` | 書き込み | 本ツール |
 
 > TTS の音響モデル (声) は、apt で入る標準の声が `/usr/share/hts-voice`
 > (root 所有) にあり書き込めないため、画面から追加する声は

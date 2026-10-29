@@ -154,6 +154,7 @@ async def system_home(
             "backup_error": backup_error,
             "perm_checks": perm_checks,
             "perm_problems": [c for c in perm_checks if not c.ok],
+            "perm_fix_all": permissions.fix_all_command(),
             "perm_user": permissions.current_user(),
             "perm_group": permissions.current_group(),
             "vr": version_report,

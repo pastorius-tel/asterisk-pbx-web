@@ -31,6 +31,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 from app.config import settings
+from app.services.permissions import describe_permission_error
 
 log = logging.getLogger(__name__)
 
@@ -135,7 +136,11 @@ async def received_tiff_to_pdf(
     try:
         store.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        return ConvertResult(False, None, f"保存先を作成できません: {store} ({e})")
+        # 対処方法 (安全なコマンド) を添えて、FAX 一覧の失敗理由に残す
+        return ConvertResult(
+            False, None,
+            f"保存先を作成できません: {store}\n{describe_permission_error(store, e)}",
+        )
 
     received_at = received_at or datetime.now()
     # cfg 自体が None の場合だけでなく、既存 DB に新カラムを追加した

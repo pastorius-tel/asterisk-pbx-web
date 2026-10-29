@@ -137,6 +137,9 @@
                   {% endif %}
                 {% else %}
                   <span class="badge badge--off">{% if c.needs_write %}書き込み不可{% else %}読み取り不可{% endif %}</span>
+                  {% if c.blocked %}
+                    <br><small class="perm-table__feature">中に書き込めないものがあります: <code>{{ c.blocked }}</code></small>
+                  {% endif %}
                   <div class="perm-table__fix">
                     <small>対処:</small>
                     <code>{{ c.fix_command }}</code>
@@ -152,7 +155,7 @@
     <p class="form-hint" style="margin-top:12px;">
       個別に直す代わりに、まとめて修正することもできます。
     </p>
-    <pre><code>sudo FIX_PERMISSIONS=1 bash scripts/setup_dependencies.sh</code></pre>
+    <pre><code>{{ perm_fix_all }}</code></pre>
   </fieldset>
 
   <fieldset class="form-section">
