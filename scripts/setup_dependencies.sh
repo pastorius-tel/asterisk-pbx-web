@@ -10,7 +10,8 @@
 #      (無い場合、Asterisk の部分再ビルドが必要 — 自動実行はしません。
 #       手順を案内するだけです。理由は update_asterisk.sh と同様、
 #       ビルド中〜再起動時に全通話が切断されるため)
-#   5. Postfix (Gmail 中継) — ボイスメール通知メールの送信経路
+#   5. Postfix (Gmail 中継) — サーバー自身のメール送信 (任意。本ツールの
+#      通知メールは Web 画面の SMTP 設定で送るため不要。setup_postfix.sh を使う)
 #   6. サーバーのタイムゾーンを Asia/Tokyo に設定
 #      (既定で UTC のクラウド/VPS イメージが多く、そのままだと
 #       Asterisk のログ・通話履歴・FAX受信日時・留守電録音日時が
@@ -190,84 +191,25 @@ EOS
 fi
 
 # =========================================================
-# 5. Postfix (Gmail 中継) — ボイスメール通知メール送信経路
+# 5. Postfix (サーバー自身のメール送信。任意)
 # =========================================================
-log "=== 5. Postfix (Gmail 中継) ==="
+# 本ツールの通知メール (受信 FAX・留守番電話) は Web 画面の
+# 「FAX 送受信 → メール設定」の SMTP で本ツールが直接送るため、Postfix は
+# 不要。サーバー自身のメール (cron・自動更新の通知など) を送りたい場合に
+# 使う。設定・変更・テスト送信は setup_postfix.sh で行う。
+log "=== 5. Postfix (サーバー自身のメール送信・任意) ==="
+SD5_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ "$SKIP_POSTFIX" = "1" ]; then
   skip "SKIP_POSTFIX=1 のためスキップ"
+elif command -v postconf >/dev/null 2>&1 && [ -n "$(postconf -h relayhost 2>/dev/null)" ] \
+     && [ -s /etc/postfix/sasl_passwd ]; then
+  skip "Postfix の中継設定は済んでいます (変更・テスト送信: sudo bash ${SD5_DIR}/setup_postfix.sh)"
+elif [ -f "$SD5_DIR/setup_postfix.sh" ]; then
+  # 旧版と同じく GMAIL_ADDRESS / GMAIL_APP_PASSWORD を渡せる (無ければ質問する)
+  APPLY=1 ROOT_FORWARD="${ROOT_FORWARD:-}" bash "$SD5_DIR/setup_postfix.sh" \
+    || warn "Postfix の設定が終わりませんでした (後で sudo APPLY=1 bash ${SD5_DIR}/setup_postfix.sh)"
 else
-  if ! command -v postfix >/dev/null 2>&1; then
-    log "インストール: postfix mailutils libsasl2-modules"
-    wait_for_apt_lock 120 || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y postfix mailutils libsasl2-modules
-    ok "Postfix をインストールしました"
-  else
-    skip "postfix は既に導入済み"
-  fi
-
-  MAIN_CF="/etc/postfix/main.cf"
-  if grep -q "^relayhost = \[smtp.gmail.com\]:587" "$MAIN_CF" 2>/dev/null; then
-    skip "main.cf の Gmail 中継設定は既に反映済み"
-  else
-    log "main.cf に Gmail 中継設定を追記します"
-    # Postfix パッケージが最初から生成する main.cf には、これから
-    # 追記するのと同じキーが (スペース有り "key = value" の場合も
-    # スペース無し "key=value" の場合もあり) 既に存在することがある。
-    # そのまま追記すると値が重複して postmap 実行時に警告が出る
-    # (動作上は後勝ちで実害は無いが、見た目が紛らわしいので該当キーの
-    # 既存行は空白の有無を問わず先に取り除いておく)。
-    for key in relayhost smtp_sasl_auth_enable smtp_sasl_password_maps \
-               smtp_sasl_security_options smtp_tls_security_level smtp_tls_CAfile; do
-      sed -i "/^${key}[[:space:]]*=/d" "$MAIN_CF"
-    done
-    {
-      echo ""
-      echo "# --- Gmail 中継設定 (setup_dependencies.sh により追加) ---"
-      echo "relayhost = [smtp.gmail.com]:587"
-      echo "smtp_sasl_auth_enable = yes"
-      echo "smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd"
-      echo "smtp_sasl_security_options = noanonymous"
-      echo "smtp_tls_security_level = encrypt"
-      echo "smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt"
-    } >> "$MAIN_CF"
-    ok "main.cf を更新しました"
-  fi
-
-  SASL_PASSWD="/etc/postfix/sasl_passwd"
-  if [ -f "$SASL_PASSWD" ] && [ -s "$SASL_PASSWD" ]; then
-    skip "sasl_passwd は既に設定済み ($SASL_PASSWD)"
-  else
-    GMAIL_ADDRESS="${GMAIL_ADDRESS:-}"
-    GMAIL_APP_PASSWORD="${GMAIL_APP_PASSWORD:-}"
-    if [ -z "$GMAIL_ADDRESS" ]; then
-      echo ""
-      echo "  Gmail 中継用の認証情報を入力してください"
-      echo "  (通常のログインパスワードではなく、2段階認証を有効にした上で"
-      echo "   https://myaccount.google.com/apppasswords で発行した"
-      echo "   16桁のアプリパスワードを使用してください)"
-      read -r -p "  Gmail アドレス: " GMAIL_ADDRESS
-    fi
-    if [ -z "$GMAIL_APP_PASSWORD" ]; then
-      read -r -s -p "  アプリパスワード (16桁・入力は非表示): " GMAIL_APP_PASSWORD
-      echo ""
-    fi
-    if [ -z "$GMAIL_ADDRESS" ] || [ -z "$GMAIL_APP_PASSWORD" ]; then
-      warn "Gmail アドレス/アプリパスワードが未入力のため sasl_passwd の作成をスキップしました"
-      warn "後で /etc/postfix/sasl_passwd に以下の書式で1行追加し、"
-      warn "sudo postmap /etc/postfix/sasl_passwd を実行してください:"
-      warn "  [smtp.gmail.com]:587 アドレス@gmail.com:アプリパスワード"
-    else
-      echo "[smtp.gmail.com]:587 ${GMAIL_ADDRESS}:${GMAIL_APP_PASSWORD}" > "$SASL_PASSWD"
-      chmod 600 "$SASL_PASSWD"
-      postmap "$SASL_PASSWD"
-      chmod 600 "${SASL_PASSWD}.db"
-      ok "sasl_passwd を作成しました"
-    fi
-  fi
-
-  systemctl restart postfix 2>&1 || warn "systemctl restart postfix に失敗しました (systemd が無い環境等では手動で 'service postfix restart' を試してください)"
-  systemctl enable postfix >/dev/null 2>&1 || true
-  ok "Postfix の再起動を試みました"
+  warn "${SD5_DIR}/setup_postfix.sh が見つかりません"
 fi
 
 # =========================================================

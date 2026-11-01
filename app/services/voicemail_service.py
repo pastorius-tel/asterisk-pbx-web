@@ -274,9 +274,9 @@ def send_voicemail_notification(
 ) -> MailResult:
     """留守番電話の録音完了をメールで通知 (音声ファイル添付可)。
 
-    FAX 側は Asterisk 自身が sendmail 経由で直接送信するが、留守番電話は
+    Asterisk 自身のメール送信 (sendmail 経由) は使わず、受信 FAX と同じく
     本ツール (Python) が Asterisk からの完了フック経由で組み立てて SMTP
-    送信する。これにより日時表記を確実に日本語化でき、件名・本文・
+    送信する (サーバーの Postfix は不要)。これにより日時表記を確実に日本語化でき、件名・本文・
     (既存の) ファイル名もすべて自由にカスタマイズできる。
 
     同期関数 (smtplib)。呼び出し側で run_in_executor 推奨。

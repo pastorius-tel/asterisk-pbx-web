@@ -39,8 +39,10 @@
       <label class="field">
         <span class="field__label">宛先 FAX 番号 <span style="color:#c00">*</span></span>
         <input class="field__input field__input--mono" name="dest_number"
-               required placeholder="0312345678" pattern="[0-9]+">
-        <small class="field__help">数字のみ。市外局番から入力。</small>
+               type="tel" inputmode="tel" autocomplete="off"
+               required placeholder="0312345678" pattern="[0-9\-\s]+"
+               title="数字で入力してください (ハイフンは入れても構いません)">
+        <small class="field__help">市外局番から入力。ハイフンは入れても構いません (送信時に取り除きます)。</small>
       </label>
       <label class="field">
         <span class="field__label">送信に使うトランク <span style="color:#c00">*</span></span>

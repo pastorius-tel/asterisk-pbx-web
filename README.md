@@ -326,6 +326,11 @@ sudo APPLY=1 bash scripts/switch_asterisk_user.sh    # 切り替える
 証明書 (TLS) や保留音のフォルダを asterisk が読めない場合、1024 未満のポートで
 待ち受ける設定がある場合は、切り替えずに止まります。
 
+ログの切り替え (logrotate) の設定 `/etc/logrotate.d/asterisk` も、新しいログを
+asterisk の持ち物として作るように直します。Asterisk の標準の設定は
+`create 640 root root` のため、そのままだと週に一度の切り替えのあと Asterisk が
+ログを書けなくなり、「変更を Asterisk へ反映」の `logger` が NG になります。
+
 #### 2. Web 画面 (`scripts/switch_service_user.sh`)
 
 ```bash
@@ -660,6 +665,27 @@ sudo asterisk -rx "pjsip show registrations"
 (メールの送信設定は「FAX 送受信」→「メール設定」で行います)。
 
 電話機からは `*97` で自分のメッセージを聞けます。
+
+### メールの送信 (通知メールと Postfix)
+
+受信 FAX と留守番電話の通知メールは、Web 画面の「FAX 送受信」→「メール設定」の
+SMTP 設定を使って、本ツールが直接送ります。**Postfix は不要です。** 画面の
+「テスト送信」で、設定が正しいかをその場で確かめられます。
+
+サーバー自身のメール (cron の結果・自動更新の通知など、root 宛てのメール) も
+送りたい場合だけ、Postfix をコマンドで設定します。
+
+```bash
+cd "$INSTALL_DIR"                                            # インストール先 (例: /var/www/asterisk-pbx-web)
+sudo bash scripts/setup_postfix.sh                           # 今の設定を表示
+sudo APPLY=1 bash scripts/setup_postfix.sh                   # 設定・変更 (質問に答える)
+sudo TEST_TO=you@example.com bash scripts/setup_postfix.sh   # テストメール
+sudo DISABLE=1 bash scripts/setup_postfix.sh                 # 外部経由の送信をやめる
+```
+
+Postfix は root の権限で動くため、Web 画面からは設定できないようにしています
+(画面に弱点があった場合に、サーバー全体を操作される入口にしないため)。
+設定は送信専用 (LAN 側には SMTP を開かない)・TLS 必須で行います。
 
 ### FAX 送受信
 

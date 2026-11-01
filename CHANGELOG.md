@@ -10,6 +10,62 @@ Asterisk PBX Web Management の版ごとの変更点です。新しい版が上�
 
 ---
 
+## 0.9.10 — 2026-11-01
+
+### 不具合の修正
+- **Asterisk を asterisk ユーザーに切り替えたあと、週に一度のログの切り替え
+  (logrotate) で Asterisk がログを書けなくなっていました。** Asterisk の標準の
+  logrotate の設定 (`/etc/logrotate.d/asterisk`) は、新しいログを
+  `create 640 root root` で作ります。切り替え後の新しいログ (messages・full・
+  queue_log など) が root の持ち物になり、asterisk で動く Asterisk はログを
+  書けず、「変更を Asterisk へ反映」の `logger` も NG になっていました。
+  - `switch_asterisk_user.sh` が、切り替えと同時に logrotate の設定を直すように
+    しました (新しいログを asterisk の持ち物として作る・切り替えの作業も asterisk で行う)。
+    元の設定は `/var/backups/` に残します (`/etc/logrotate.d` の中に置くと
+    logrotate が設定として読んでしまうため)。
+  - `check_permissions.sh` (更新のたびにも動く) が、Asterisk のログのフォルダと
+    logrotate の設定も確かめて直すようにしました。直したあとは Asterisk にログを
+    開き直させます。すでに切り替え済みの環境は、0.9.10 への更新で直ります。
+- 「変更を Asterisk へ反映」で CLI 経由の再読み込み (logger など) が失敗したとき、
+  理由が「Command output follows」としか表示されていませんでした。Asterisk が
+  返した本当の理由 (例: Failed to reload the logger) と、直し方を表示します。
+
+### 確認したこと
+- asterisk で動く Asterisk で、標準の設定のまま logrotate を実行すると
+  `logger` が NG になることを再現し、0.9.10 への更新で、ログの持ち主と logrotate の
+  設定が直り、もう一度 logrotate を実行しても新しいログが asterisk の持ち物になり、
+  `logger` が OK になることを確認しました。
+
+---
+
+## 0.9.9 — 2026-11-01
+
+### 改善
+- **FAX 送信画面の宛先番号の欄で、スマートフォンに電話番号用のキーボードが
+  出るようにしました。** ハイフンを入れても構いません (送信時に取り除きます)。
+- **Postfix の設定・変更・テスト送信を行うスクリプト `scripts/setup_postfix.sh`
+  を追加しました。** 何も付けずに実行すると今の設定を表示し、`APPLY=1` で
+  設定・変更、`TEST_TO=アドレス` でテストメールを送って結果 (送信済み・
+  再送待ち・失敗と理由) を表示、`DISABLE=1` で外部経由の送信をやめます。
+  - Gmail 以外の SMTP サーバー・ポート 465 にも対応しました。以前の設定
+    (`setup_dependencies.sh`) は Gmail 固定で、一度設定するとアカウントや
+    パスワードを変えられませんでした。
+  - 送信専用として設定し、LAN 側に SMTP を開けません (`inet_interfaces = loopback-only`)。
+    TLS は必須で、OS の証明書で検証します。
+  - パスワードは画面に表示しない入力で尋ね、root だけが読めるファイルに保存します。
+    Gmail のアプリパスワードに含まれる空白は自動で取り除きます。
+  - root 宛てのメール (cron の結果・自動更新の通知など) の転送先も設定できます。
+  - 新しい Postfix (Berkeley DB を持たない版) でも動くよう、パスワードの表の形式は
+    Postfix の既定に合わせます。
+
+### 修正 (説明の誤り)
+- インストール完了時の案内が「メール通知 (留守電・FAX) には Postfix の設定が必要」と
+  なっていましたが、誤りでした。通知メールは Web 画面の「FAX 送受信 → メール設定」の
+  SMTP 設定で本ツールが直接送るため、Postfix は不要です。案内とメール設定画面の
+  説明を直しました。
+
+---
+
 ## 0.9.8 — 2026-10-29
 
 0.9.7 で直した「受信 FAX の保存先が無い」不具合と同じ種類の問題 (本ツールが

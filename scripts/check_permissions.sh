@@ -21,6 +21,10 @@
 #   /var/lib/asterisk-pbx-web 受信・送信 FAX の PDF (fax)・音声合成の声 (hts-voice)
 #   /var/lib/asterisk/sounds/ja    日本語音声・アップロードした音源・日時読み上げ
 #   /var/lib/asterisk/sounds  画面から日本語音声を入れるときの展開先
+#   /var/log/asterisk         Asterisk 本体のログ (Asterisk が root 以外で動くとき)
+#   /etc/logrotate.d/asterisk ログの切り替えで新しく作るファイルの持ち主
+#                             (root のままだと、切り替えのあと Asterisk が
+#                              ログを書けなくなり、logger reload も失敗する)
 #
 # 標準以外の場所 (.env で指定した Samba の共有フォルダなど) は、持ち主や
 # グループを勝手に変えず、必要なコマンドを表示するだけにする。
@@ -136,6 +140,18 @@ perm_init() {
     P_JA_DIR="/var/lib/asterisk/sounds/ja"     # 日本語音声・日時読み上げ (固定)
     P_SOUNDS_ROOT="/var/lib/asterisk/sounds"   # 日本語音声パックの展開先 (固定)
 
+    # Asterisk 本体の実行ユーザー (root か、動いていなければ空)
+    PERM_AST_USER=""; PERM_AST_GROUP=""
+    if [ -n "$ast_pid" ]; then
+        PERM_AST_USER="$(ps -o user= -p "$ast_pid" 2>/dev/null | tr -d ' ' || true)"
+        PERM_AST_GROUP="$(ps -o group= -p "$ast_pid" 2>/dev/null | tr -d ' ' || true)"
+        [ "$PERM_AST_USER" = "root" ] && PERM_AST_USER=""
+    fi
+    P_AST_LOG_DIR="$(sed -n 's/^[[:space:]]*astlogdir[[:space:]]*=>\{0,1\}[[:space:]]*\([^;[:space:]]*\).*/\1/p' \
+                       "${P_CONF_DIR:-/etc/asterisk}/asterisk.conf" 2>/dev/null | tail -1)"
+    P_AST_LOG_DIR="${P_AST_LOG_DIR:-/var/log/asterisk}"
+    P_LOGROTATE="/etc/logrotate.d/asterisk"
+
     local db_url
     db_url="$(perm_env_get DATABASE_URL)"
     PERM_DB_FILE=""
@@ -170,6 +186,10 @@ perm_init() {
     _pt ownx   "$P_JA_DIR"         "日本語音声・日時読み上げ"
     perm_inside_install "$P_SND_DIR"   || _pt own "$P_SND_DIR"   "アップロードした音源・保留音"
     _pt dir    "$P_SOUNDS_ROOT"    "日本語音声パックの展開先"
+    if [ -n "$PERM_AST_USER" ]; then
+        _pt astown    "$P_AST_LOG_DIR" "Asterisk のログ (Asterisk 本体が書き込む)"
+        [ -f "$P_LOGROTATE" ] && _pt logrotate "$P_LOGROTATE" "ログの切り替え (logrotate) で作るファイルの持ち主"
+    fi
     if [ -n "$P_UPL_DIR" ] && ! perm_inside_install "$P_UPL_DIR"; then _pt own "$P_UPL_DIR" "アップロード"; fi
     if [ -n "$P_BAK_DIR" ] && ! perm_inside_install "$P_BAK_DIR"; then _pt own "$P_BAK_DIR" "バックアップ"; fi
     if [ -n "$PERM_DB_FILE" ] && ! perm_inside_install "$PERM_DB_FILE"; then _pt dbfile "$PERM_DB_FILE" "データベース"; fi
@@ -197,7 +217,42 @@ perm_needs_fix() {
                 [ "$(stat -c %U "$f")" = "$PERM_USER" ] || return 1
             done
             return 0 ;;
+        astown)
+            [ -z "$(find "$real" ! -user "$PERM_AST_USER" -print -quit 2>/dev/null)" ] ;;
+        logrotate)
+            perm_logrotate_ok "$real" "$PERM_AST_USER" ;;
     esac
+}
+
+# logrotate の設定が、Asterisk の実行ユーザーでログを作り直すようになっているか。
+# Asterisk の標準の設定 (make install-logrotate) は「create 640 root root」で、
+# 週に一度の切り替えのあと、新しいログが root の持ち物になってしまう。
+perm_logrotate_ok() {
+    local f="$1" u="$2"
+    grep -qE "^[[:space:]]*create[[:space:]]+[0-7]+[[:space:]]+root[[:space:]]+root" "$f" && return 1
+    grep -qE "^[[:space:]]*su[[:space:]]+${u}[[:space:]]" "$f" || return 1
+    return 0
+}
+# logrotate の設定を、Asterisk の実行ユーザーでログを作り直すように書き換える。
+# バックアップは /etc/logrotate.d の外に置く (中に置くと logrotate が設定として読んでしまう)
+perm_logrotate_fix() {
+    local f="$1" u="$2" g="$3" bak
+    bak="/var/backups/logrotate.d-asterisk.bak-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p /var/backups
+    cp -a "$f" "$bak"
+    sed -i -E "s/^([[:space:]]*create[[:space:]]+[0-7]+)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+/\1 ${u} ${g}/" "$f"
+    if ! grep -qE "^[[:space:]]*su[[:space:]]+" "$f"; then
+        # 最初の「{」の行のすぐ後に su を入れる (切り替えの作業を Asterisk のユーザーで行う)
+        sed -i -E "0,/\{[[:space:]]*$/s//{\n\tsu ${u} ${g}/" "$f"
+    else
+        sed -i -E "s/^([[:space:]]*su)[[:space:]]+.*/\1 ${u} ${g}/" "$f"
+    fi
+    if command -v logrotate >/dev/null 2>&1 && ! logrotate -d "$f" >/dev/null 2>&1; then
+        cp -a "$bak" "$f"
+        warn "${f} の書き換えで logrotate がエラーになるため、元に戻しました (バックアップ: ${bak})"
+        return 1
+    fi
+    return 0
 }
 
 # 全部の場所を確かめて表示し、PERM_CHANGES (直すもの) と PERM_BLOCKERS
@@ -240,6 +295,8 @@ perm_classify() {
                 fi ;;
         esac
         case "$kind" in
+            astown)    todo "${path}  持ち主を ${PERM_AST_USER} にします  (${desc}。root の持ち物のファイルには Asterisk がログを書けません)" ;;
+            logrotate) todo "${path}  新しく作るログを ${PERM_AST_USER} の持ち物にします  (今は root で作られ、切り替えのあと Asterisk がログを書けなくなります)" ;;
             app|own|ownx|dbfile) todo "${path}  持ち主を ${PERM_USER} にします  (${desc})" ;;
             share|sharec)        todo "${path}  グループを ${PERM_SHARE_GROUP} にして書き込み可にします  (${desc})" ;;
             dir)                 todo "${path}  このフォルダだけグループを ${PERM_SHARE_GROUP} にして書き込み可にします  (${desc})" ;;
@@ -307,8 +364,26 @@ perm_apply() {
                 done
                 ok "${path}: 持ち主を ${PERM_USER} にしました"
                 ;;
+            astown)
+                chown -R "$PERM_AST_USER:${PERM_AST_GROUP:-$PERM_AST_USER}" "$(readlink -f "$path")"
+                ok "${path}: 持ち主を ${PERM_AST_USER} にしました"
+                PERM_RELOAD_LOGGER=1
+                ;;
+            logrotate)
+                if perm_logrotate_fix "$path" "$PERM_AST_USER" "${PERM_AST_GROUP:-$PERM_AST_USER}"; then
+                    ok "${path}: ログを ${PERM_AST_USER} で作り直すようにしました"
+                fi
+                ;;
         esac
     done
+    # Asterisk に、持ち主を直したログファイルを開き直させる
+    if [ "${PERM_RELOAD_LOGGER:-0}" = "1" ] && command -v asterisk >/dev/null 2>&1; then
+        if asterisk -rx "logger reload" 2>/dev/null | grep -q "Failed"; then
+            warn "Asterisk のログを開き直せませんでした (asterisk -rx \"logger reload\" を確認してください)"
+        else
+            ok "Asterisk のログを開き直しました (logger reload)"
+        fi
+    fi
     if [ "${PERM_ADD_GROUP:-0}" = "1" ]; then
         usermod -aG "$PERM_SHARE_GROUP" "$PERM_USER"
         ok "${PERM_USER} をグループ ${PERM_SHARE_GROUP} に加えました (サービスの再起動で反映されます)"

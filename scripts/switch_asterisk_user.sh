@@ -295,6 +295,24 @@ for d in "${OWN_DIRS[@]}"; do
         CHANGES+=("$d")
     fi
 done
+
+# --- ログの切り替え (logrotate) ---
+# Asterisk の標準の設定は「create 640 root root」で、週に一度の切り替えのあと
+# 新しいログが root の持ち物になり、asterisk で動く Asterisk がログを書けなく
+# なる (logger reload も失敗する)。切り替えと同時に直す。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOGROTATE_CONF="/etc/logrotate.d/asterisk"
+LOGROTATE_FIX=0
+if [ -f "$LOGROTATE_CONF" ] && [ -f "$SCRIPT_DIR/check_permissions.sh" ]; then
+    # shellcheck source=check_permissions.sh
+    . "$SCRIPT_DIR/check_permissions.sh"
+    if perm_logrotate_ok "$LOGROTATE_CONF" "$NEW_USER"; then
+        ok "${LOGROTATE_CONF}  (ログを ${NEW_USER} で作り直す設定)"
+    else
+        todo "${LOGROTATE_CONF}  ログの切り替えで作るファイルを ${NEW_USER} の持ち物にします"
+        LOGROTATE_FIX=1
+    fi
+fi
 under_own_dirs() {
     local p o
     p="$(readlink -f "$1" 2>/dev/null || printf '%s' "$1")"
@@ -398,6 +416,9 @@ for d in "${CHANGES[@]}"; do
     chown -R "$NEW_USER:$NEW_USER" "$d"
     ok "${d}: 持ち主を ${NEW_USER} にしました"
 done
+if [ "$LOGROTATE_FIX" = "1" ] && perm_logrotate_fix "$LOGROTATE_CONF" "$NEW_USER" "$NEW_USER"; then
+    ok "${LOGROTATE_CONF}: ログを ${NEW_USER} で作り直すようにしました"
+fi
 if [ "$CONF_RU" != "$NEW_USER" ]; then
     set_runuser "$AST_CONF"
     [ "$(conf_runuser)" = "$NEW_USER" ] || { systemctl start "$AST_UNIT" || true; err "${AST_CONF} を書き換えられませんでした。"; }

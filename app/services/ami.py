@@ -115,6 +115,13 @@ class AmiClient:
             or "Privilege: Command" in raw
         ) and "Response: Error" not in raw
         msg = self._extract_message(raw)
+        # CLI コマンド (Action: Command) が失敗したとき、Message は
+        # 「Command output follows」という決まり文句で、本当の理由は
+        # Output: 行に入っている (例: "Failed to reload the logger")。
+        if not success:
+            output = self._extract_output(raw)
+            if output:
+                msg = output
         # メッセージが空なら raw 全文の代わりに「OK」を返す (NG表示が
         # 内部レスポンスで埋まらないようにする)
         if not msg:
@@ -138,6 +145,16 @@ class AmiClient:
     @staticmethod
     def _new_action_id() -> str:
         return secrets.token_hex(8)
+
+    @staticmethod
+    def _extract_output(raw: str) -> str:
+        """Action: Command の応答の Output: 行をつなげたもの。"""
+        lines = [
+            line.split(":", 1)[1].strip()
+            for line in raw.splitlines()
+            if line.lower().startswith("output:")
+        ]
+        return " / ".join(x for x in lines if x)
 
     @staticmethod
     def _extract_message(raw: str) -> str:
@@ -276,7 +293,16 @@ async def reload_asterisk_safely() -> dict[str, str]:
             # `logger reload` を使う。これを忘れると、logger.conf に
             # 'fax' レベルを足しても再起動まで FAX のトレースが出ない。
             rl = await ami.command("logger reload")
-            results["logger"] = "OK" if rl.success else f"NG: {rl.message[:200]}"
+            if rl.success:
+                results["logger"] = "OK"
+            else:
+                # 失敗するのは、ログ (queue_log など) を開けないときだけ。
+                # 多くは logrotate が root の持ち物でログを作り直したため。
+                from app.services.permissions import fix_all_command
+                results["logger"] = (
+                    f"NG: {rl.message[:200]} (Asterisk がログに書き込めません。"
+                    f"{fix_all_command()} で直せます)"
+                )
     except Exception as exc:  # noqa: BLE001
         log.warning("AMI reload failed: %s", exc)
         results["error"] = str(exc)

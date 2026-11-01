@@ -688,9 +688,10 @@ cat <<EOF
  3. 「着信ルート」で着信先を設定
  4. 左下の「変更を Asterisk へ反映」を実行
 
- メール通知 (留守電・FAX) を使う場合は、Postfix の設定が必要です:
-   sudo bash ${INSTALL_DIR}/scripts/setup_dependencies.sh
-   (Gmail 中継の設定を対話で行えます)
+ メール通知 (留守電・FAX) を使う場合は、Web 画面の
+ 「FAX 送受信」→「メール設定」で SMTP を設定します (Postfix は不要です)。
+ サーバー自身のメール (cron の結果など) も送りたい場合だけ、Postfix を設定します:
+   sudo APPLY=1 bash ${INSTALL_DIR}/scripts/setup_postfix.sh
 
  音声合成の声を増やす場合:
    sudo bash ${INSTALL_DIR}/scripts/install_tts_voices.sh

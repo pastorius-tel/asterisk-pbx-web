@@ -15,7 +15,8 @@
 {% endif %}
 
 <p class="form-hint">
-  受信 FAX を PDF 添付でメール通知するための SMTP 設定です。
+  受信 FAX (PDF 添付) と留守番電話 (音声添付) の通知メールを送るための SMTP 設定です。
+  本ツールがこの設定で直接送るので、サーバーに Postfix を設定する必要はありません。
   Gmail を使う場合は 2 段階認証を有効化し、<strong>アプリパスワード</strong>を発行して
   下記パスワード欄に入力してください
   (ホスト: <code>smtp.gmail.com</code> / ポート: <code>587</code> / セキュリティ: <code>STARTTLS</code>)。
