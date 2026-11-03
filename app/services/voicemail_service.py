@@ -20,14 +20,14 @@ from __future__ import annotations
 
 import logging
 import re
-import smtplib
-import ssl
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
 
 from app.config import settings
+from app.services import mailer
+from app.services.mailer import MailResult
 
 log = logging.getLogger(__name__)
 
@@ -258,12 +258,6 @@ def format_japanese_datetime(dt: datetime) -> str:
     )
 
 
-@dataclass
-class MailResult:
-    ok: bool
-    detail: str
-
-
 def send_voicemail_notification(
     smtp_cfg,  # FaxConfig (SMTP 接続情報を流用)
     app_settings,  # AppSettings (件名・本文テンプレート)
@@ -276,7 +270,7 @@ def send_voicemail_notification(
 
     Asterisk 自身のメール送信 (sendmail 経由) は使わず、受信 FAX と同じく
     本ツール (Python) が Asterisk からの完了フック経由で組み立てて SMTP
-    送信する (サーバーの Postfix は不要)。これにより日時表記を確実に日本語化でき、件名・本文・
+    送信する (送信は mailer.py。サーバーの Postfix は不要)。これにより日時表記を確実に日本語化でき、件名・本文・
     (既存の) ファイル名もすべて自由にカスタマイズできる。
 
     同期関数 (smtplib)。呼び出し側で run_in_executor 推奨。
@@ -330,22 +324,4 @@ def send_voicemail_notification(
         except OSError as e:
             log.warning("留守番電話の音声添付に失敗: %s", e)
 
-    try:
-        if smtp_cfg.smtp_security == "ssl":
-            ctx2 = ssl.create_default_context()
-            with smtplib.SMTP_SSL(smtp_cfg.smtp_host, smtp_cfg.smtp_port, timeout=30, context=ctx2) as s:
-                if smtp_cfg.smtp_username:
-                    s.login(smtp_cfg.smtp_username, smtp_cfg.smtp_password or "")
-                s.send_message(mail)
-        else:
-            with smtplib.SMTP(smtp_cfg.smtp_host, smtp_cfg.smtp_port, timeout=30) as s:
-                s.ehlo()
-                if smtp_cfg.smtp_security == "starttls":
-                    s.starttls(context=ssl.create_default_context())
-                    s.ehlo()
-                if smtp_cfg.smtp_username:
-                    s.login(smtp_cfg.smtp_username, smtp_cfg.smtp_password or "")
-                s.send_message(mail)
-        return MailResult(True, "送信しました。")
-    except Exception as e:  # noqa: BLE001
-        return MailResult(False, f"SMTP 送信エラー: {e}")
+    return mailer.deliver(smtp_cfg, mail)

@@ -232,6 +232,12 @@ if [ "$(cd "$SRC_APP" && pwd)" != "$(cd "$INSTALL_DIR" && pwd)" ]; then
         -cf - . | tar -C "$INSTALL_DIR" -xf -
 fi
 ok "$INSTALL_DIR へ展開"
+# 配布をやめた版 (0.9.11) で増えたファイル。上書き展開では消えないので、ここで消す
+for f in app/services/phone_setup.py app/templates/extensions/phone_setup.html; do
+    if [ -f "$INSTALL_DIR/$f" ] && [ ! -f "$SRC_APP/$f" ]; then
+        rm -f "$INSTALL_DIR/$f" && ok "使わなくなったファイルを削除: $f"
+    fi
+done
 
 # -----------------------------------------------------------------------------
 log "4/6  依存ライブラリ (動作確認済みの版)"

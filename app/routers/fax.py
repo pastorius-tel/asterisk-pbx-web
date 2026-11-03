@@ -3,7 +3,8 @@
   GET  /fax/                  履歴一覧 + ステータス
   GET  /fax/config            設定画面 (SMTP / 受信DID / 自局番号)
   POST /fax/config            設定保存
-  POST /fax/config/test-smtp  SMTP 疎通テスト
+  POST /fax/config/mail       メール設定の保存
+  POST /fax/config/mail/test  メール設定を保存して、通知先へテストメールを送る
   GET  /fax/send              送信フォーム
   POST /fax/send              PDF アップロード → SendFAX 実行
   GET  /fax/{id}/download     保存済み PDF ダウンロード
@@ -170,6 +171,33 @@ async def fax_config_mail_form(
     )
 
 
+def _apply_mail_form(
+    cfg: FaxConfig,
+    *,
+    smtp_host: str | None,
+    smtp_port: int,
+    smtp_security: str,
+    smtp_username: str | None,
+    smtp_password: str | None,
+    mail_from: str | None,
+    mail_to: str | None,
+    mail_subject_prefix: str,
+    mail_body_template: str | None,
+) -> None:
+    """メール設定フォームの値を cfg へ入れる (保存とテストで共通)。"""
+    cfg.smtp_host = (smtp_host or "").strip() or None
+    cfg.smtp_port = smtp_port
+    cfg.smtp_security = smtp_security if smtp_security in ("starttls", "ssl", "none") else "starttls"
+    cfg.smtp_username = (smtp_username or "").strip() or None
+    if smtp_password:  # 空送信時は既存を保持
+        cfg.smtp_password = smtp_password
+    cfg.mail_from = (mail_from or "").strip() or None
+    cfg.mail_to = (mail_to or "").strip() or None
+    cfg.mail_subject_prefix = mail_subject_prefix or "[FAX受信]"
+    if mail_body_template and mail_body_template.strip():
+        cfg.mail_body_template = mail_body_template
+
+
 @router.post("/config/mail", response_class=HTMLResponse, response_model=None)
 async def fax_config_mail_save(
     request: Request,
@@ -185,37 +213,60 @@ async def fax_config_mail_save(
     mail_body_template: str | None = Form(None),
 ) -> RedirectResponse:
     cfg = await _get_or_create_config(db)
-    cfg.smtp_host = (smtp_host or "").strip() or None
-    cfg.smtp_port = smtp_port
-    cfg.smtp_security = smtp_security
-    cfg.smtp_username = (smtp_username or "").strip() or None
-    if smtp_password:  # 空送信時は既存を保持
-        cfg.smtp_password = smtp_password
-    cfg.mail_from = (mail_from or "").strip() or None
-    cfg.mail_to = (mail_to or "").strip() or None
-    cfg.mail_subject_prefix = mail_subject_prefix or "[FAX受信]"
-    if mail_body_template and mail_body_template.strip():
-        cfg.mail_body_template = mail_body_template
+    _apply_mail_form(
+        cfg, smtp_host=smtp_host, smtp_port=smtp_port, smtp_security=smtp_security,
+        smtp_username=smtp_username, smtp_password=smtp_password,
+        mail_from=mail_from, mail_to=mail_to,
+        mail_subject_prefix=mail_subject_prefix, mail_body_template=mail_body_template,
+    )
     await db.commit()
     return RedirectResponse(
-        "/fax/config/mail", status_code=status.HTTP_303_SEE_OTHER
+        "/fax/config/mail?saved=1", status_code=status.HTTP_303_SEE_OTHER
     )
 
 
 @router.post("/config/mail/test", response_class=HTMLResponse)
-async def fax_test_smtp(
-    request: Request, db: AsyncSession = Depends(get_db)
+async def fax_test_mail(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    smtp_host: str | None = Form(None),
+    smtp_port: int = Form(587),
+    smtp_security: str = Form("starttls"),
+    smtp_username: str | None = Form(None),
+    smtp_password: str | None = Form(None),
+    mail_from: str | None = Form(None),
+    mail_to: str | None = Form(None),
+    mail_subject_prefix: str = Form("[FAX受信]"),
+    mail_body_template: str | None = Form(None),
 ) -> HTMLResponse:
+    """画面の値を保存してから、通知先 (To) へテストメールを実際に送る。
+
+    以前は保存済みの値で SMTP サーバーへの接続とログインだけを試していたため、
+    「成功」と出てもメールは届かなかった (送っていなかった)。今はテストした
+    値 = 通知に使う値 になるよう、先に保存する。
+    """
     cfg = await _get_or_create_config(db)
+    _apply_mail_form(
+        cfg, smtp_host=smtp_host, smtp_port=smtp_port, smtp_security=smtp_security,
+        smtp_username=smtp_username, smtp_password=smtp_password,
+        mail_from=mail_from, mail_to=mail_to,
+        mail_subject_prefix=mail_subject_prefix, mail_body_template=mail_body_template,
+    )
+    # SMTP は数十秒かかることがあるので、値をコピーしてから保存・送信する
+    snapshot = _ConfigSnapshot(cfg)
+    await db.commit()
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, fax_service.smtp_test, cfg)
+    result = await loop.run_in_executor(None, fax_service.send_test_mail, snapshot)
+    if result.ok:
+        log.info("テストメール送信: %s / %s / %s", result.detail, result.message_id, result.server_reply)
+    else:
+        log.warning("テストメール送信失敗: %s", result.detail)
     return request.app.state.templates.TemplateResponse(
         request, "fax/config_mail.html",
         {
             "title": "FAX メール設定",
             "cfg": cfg,
-            "test_ok": result.ok,
-            "test_msg": result.detail,
+            "test_result": result,
         },
     )
 

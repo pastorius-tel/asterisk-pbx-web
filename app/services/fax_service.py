@@ -4,7 +4,7 @@
   Asterisk(ReceiveFAX) → TIFF を fax_spool_dir に保存
   → 本ツールが TIFF→PDF 変換 (tiff2pdf)
   → 受信FAX_YYYYMMDD_HHMM_<着信番号>.pdf として fax_store_dir に保存
-  → SMTP で通知メール (着信番号・受信時刻を本文、PDF 添付)
+  → SMTP で通知メール (着信番号・受信時刻を本文、PDF 添付。送信は mailer.py)
 
 送信フロー:
   Web から PDF アップロード
@@ -23,14 +23,14 @@ import asyncio
 import logging
 import re
 import shutil
-import smtplib
-import ssl
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
 
 from app.config import settings
+from app.services import mailer
+from app.services.mailer import MailResult
 from app.services.permissions import describe_permission_error
 
 log = logging.getLogger(__name__)
@@ -267,12 +267,6 @@ def store_sent_pdf(
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class MailResult:
-    ok: bool
-    detail: str
-
-
 def send_received_fax_mail(
     cfg,  # FaxConfig
     pdf_path: Path,
@@ -287,7 +281,7 @@ def send_received_fax_mail(
     if not cfg.smtp_host or not cfg.mail_from or not cfg.mail_to:
         return MailResult(False, "SMTP 設定 (host/from/to) が未設定です。")
 
-    recipients = [a.strip() for a in cfg.mail_to.split(",") if a.strip()]
+    recipients = mailer.split_addresses(cfg.mail_to)
     if not recipients:
         return MailResult(False, "宛先メールアドレスが空です。")
 
@@ -332,48 +326,16 @@ def send_received_fax_mail(
     except OSError as e:
         return MailResult(False, f"添付 PDF を読めません: {e}")
 
-    try:
-        if cfg.smtp_security == "ssl":
-            ctx = ssl.create_default_context()
-            with smtplib.SMTP_SSL(cfg.smtp_host, cfg.smtp_port, timeout=30, context=ctx) as s:
-                if cfg.smtp_username:
-                    s.login(cfg.smtp_username, cfg.smtp_password or "")
-                s.send_message(msg)
-        else:
-            with smtplib.SMTP(cfg.smtp_host, cfg.smtp_port, timeout=30) as s:
-                s.ehlo()
-                if cfg.smtp_security == "starttls":
-                    s.starttls(context=ssl.create_default_context())
-                    s.ehlo()
-                if cfg.smtp_username:
-                    s.login(cfg.smtp_username, cfg.smtp_password or "")
-                s.send_message(msg)
-        return MailResult(True, f"{len(recipients)} 件へ送信しました。")
-    except Exception as e:  # noqa: BLE001
-        return MailResult(False, f"SMTP 送信エラー: {e}")
+    return mailer.deliver(cfg, msg)
 
 
-def smtp_test(cfg) -> MailResult:  # FaxConfig
-    """SMTP 設定の疎通テスト (ログインまで)。"""
-    if not cfg.smtp_host:
-        return MailResult(False, "SMTP ホスト未設定")
-    try:
-        if cfg.smtp_security == "ssl":
-            ctx = ssl.create_default_context()
-            with smtplib.SMTP_SSL(cfg.smtp_host, cfg.smtp_port, timeout=20, context=ctx) as s:
-                if cfg.smtp_username:
-                    s.login(cfg.smtp_username, cfg.smtp_password or "")
-        else:
-            with smtplib.SMTP(cfg.smtp_host, cfg.smtp_port, timeout=20) as s:
-                s.ehlo()
-                if cfg.smtp_security == "starttls":
-                    s.starttls(context=ssl.create_default_context())
-                    s.ehlo()
-                if cfg.smtp_username:
-                    s.login(cfg.smtp_username, cfg.smtp_password or "")
-        return MailResult(True, "SMTP 接続・認証に成功しました。")
-    except Exception as e:  # noqa: BLE001
-        return MailResult(False, f"SMTP テスト失敗: {e}")
+def send_test_mail(cfg) -> MailResult:  # FaxConfig
+    """メール設定のテスト: 通知先 (To) へ実際にテストメールを送る。
+
+    以前は SMTP サーバーへの接続とログインだけを確かめていたため、
+    「成功」と表示されてもメールは 1 通も送られていなかった。
+    """
+    return mailer.send_test_mail(cfg)
 
 
 # ---------------------------------------------------------------------------

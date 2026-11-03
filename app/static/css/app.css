@@ -1169,3 +1169,19 @@ pre {
 @media (max-width: 560px) {
   .version-table th { width: 6.5em !important; font-size: 11px; }
 }
+
+/* FAX メール設定: テストメールの結果とプリセットの説明 */
+.mail-result__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 8px 0;
+}
+.mail-result__facts dt { font-weight: 600; }
+.mail-result__facts dd { margin: 0; overflow-wrap: anywhere; }
+.mail-presets { padding-left: 1.3em; margin-bottom: 16px; }
+.mail-presets li { margin-bottom: 4px; }
+@media (max-width: 600px) {
+  .mail-result__facts { grid-template-columns: minmax(0, 1fr); }
+  .mail-result__facts dd { margin-bottom: 4px; }
+}

@@ -6,21 +6,41 @@
 
 {% block content %}
 
-{% if test_msg %}
-<div class="form-hint" style="padding:10px;border-radius:6px;
-  {% if test_ok %}background:#d1e7dd;border:1px solid #a3cfbb;
-  {% else %}background:#f8d7da;border:1px solid #f1aeb5;{% endif %}">
-  <strong>SMTP テスト:</strong> {{ test_msg }}
-</div>
+{% if test_result %}
+  {% if test_result.ok %}
+  <div class="notice" role="status">
+    <strong>テストメールを送りました。</strong>
+    {{ test_result.detail }}
+    <dl class="mail-result__facts">
+      {% if test_result.server_reply %}<dt>SMTP サーバーの応答</dt><dd><code>{{ test_result.server_reply }}</code></dd>{% endif %}
+      {% if test_result.message_id %}<dt>Message-ID</dt><dd><code>{{ test_result.message_id }}</code></dd>{% endif %}
+    </dl>
+    <small>件名は「[テスト] PBX 通知メールの確認」です。数分たっても届かないときは、迷惑メールフォルダも確かめてください。
+    上の応答はサーバーが受け取ったことを示すので、届かない場合は送信先 (メールサービス) 側で上の Message-ID を手がかりに調べられます。</small>
+  </div>
+  {% else %}
+  <div class="errors" role="alert">
+    <strong>テストメールを送れませんでした。</strong>
+    {{ test_result.detail }}
+  </div>
+  {% endif %}
+{% elif request.query_params.get("saved") %}
+  <div class="notice" role="status">メール設定を保存しました。「保存してテストメールを送る」で、通知先へ実際に届くか確かめられます。</div>
 {% endif %}
 
 <p class="form-hint">
   受信 FAX (PDF 添付) と留守番電話 (音声添付) の通知メールを送るための SMTP 設定です。
   本ツールがこの設定で直接送るので、サーバーに Postfix を設定する必要はありません。
-  Gmail を使う場合は 2 段階認証を有効化し、<strong>アプリパスワード</strong>を発行して
-  下記パスワード欄に入力してください
-  (ホスト: <code>smtp.gmail.com</code> / ポート: <code>587</code> / セキュリティ: <code>STARTTLS</code>)。
 </p>
+<ul class="form-hint mail-presets">
+  <li><strong>Gmail</strong>: ホスト <code>smtp.gmail.com</code> / ポート <code>587</code> /
+    セキュリティ <code>STARTTLS</code> / ユーザー名 = Gmail のアドレス /
+    パスワード = <strong>アプリパスワード</strong> (2 段階認証を有効にして発行した 16 文字)。
+    送信元 (From) も同じ Gmail のアドレスにしてください。</li>
+  <li><strong>このサーバーの Postfix</strong> (<code>scripts/setup_postfix.sh</code> で設定済みの場合):
+    ホスト <code>127.0.0.1</code> / ポート <code>25</code> / セキュリティ <code>なし</code> /
+    ユーザー名・パスワードは空欄。</li>
+</ul>
 
 <form method="post" action="/fax/config/mail" class="form-grid" autocomplete="off">
 
@@ -42,7 +62,7 @@
         <select class="field__select" name="smtp_security">
           <option value="starttls" {% if cfg.smtp_security == "starttls" %}selected{% endif %}>STARTTLS (587)</option>
           <option value="ssl" {% if cfg.smtp_security == "ssl" %}selected{% endif %}>SSL/TLS (465)</option>
-          <option value="none" {% if cfg.smtp_security == "none" %}selected{% endif %}>なし (非推奨)</option>
+          <option value="none" {% if cfg.smtp_security == "none" %}selected{% endif %}>なし (このサーバーの Postfix のときだけ)</option>
         </select>
       </label>
     </div>
@@ -101,8 +121,9 @@
   <div class="form-foot">
     <button type="submit" class="btn btn--primary">メール設定を保存</button>
     <button type="submit" formaction="/fax/config/mail/test" formmethod="post"
-            class="btn">SMTP 接続テスト</button>
+            class="btn">保存してテストメールを送る</button>
   </div>
+  <p class="form-hint">「保存してテストメールを送る」は、画面の値を保存してから、通知先 (To) へテストメールを 1 通送ります。</p>
 </form>
 
 {% endblock %}
